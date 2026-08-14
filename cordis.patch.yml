@@ -1,0 +1,4 @@
+# dsh-wallet bundle patch: mounts the wallet row (host + browser halves).
+- insert:
+    - id: wallet
+      name: dsh-wallet

@@ -1,0 +1,23 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate package metadata
+        run: node -e "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'))"
+      - name: Check host syntax
+        run: node --check index.js
+      - name: Check browser syntax
+        run: node --check lib/client.js

@@ -1,0 +1,53 @@
+{
+  "name": "dsh-wallet",
+  "description": "Balance monitoring, per-session spend tracking, token statistics, low-balance alerts, and an official recharge shortcut for DeepSeek Harness.",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib/client.js",
+    "cordis.patch.yml"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "balance-monitor",
+    "recharge",
+    "token-tracking",
+    "cost-tracking",
+    "wallet",
+    "llm",
+    "agentic-ai"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/feibi-mochi/deepseek-harness-wallet.git"
+  },
+  "homepage": "https://github.com/feibi-mochi/deepseek-harness-wallet#readme",
+  "bugs": {
+    "url": "https://github.com/feibi-mochi/deepseek-harness-wallet/issues"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
