@@ -13,7 +13,7 @@
 
 **The multi-provider wallet chip for the DeepSeek Harness Web GUI.**
 
-A resident one-line chip beside the composer: official DeepSeek money (balance, session cost, tokens, one-click recharge, low-balance alert) plus the third-party token total. Accounting is bucketed per provider — a GLM session never shows a DeepSeek balance, and DeepSeek costs are never computed from GLM tokens.
+A resident one-line chip beside the composer: official DeepSeek (balance, session cost, tokens, one-click recharge, low-balance alert) plus the third-party token total. Accounting is bucketed per provider — a GLM session never shows a DeepSeek balance, and DeepSeek costs are never computed from GLM tokens.
 
 <p align="center">
   If dsh-wallet helps you, please consider leaving a ⭐ Star. Thank you!
