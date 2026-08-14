@@ -18,7 +18,7 @@
 输入框旁一行常驻标签：官方 DeepSeek 的（余额、本会话花费、token、一键充值、低余额提醒）与第三方合计 token，按供应商分桶记账，永不错位——GLM 会话不会显示 DeepSeek 的余额，DeepSeek 的账单不会拿 GLM 的 token 来算。
 
 <p align="center">
-  如果 dsh-wallet 帮到了你，请考虑点一个 ⭐ Star，谢谢！
+  如果 deepseek-harness-wallet 帮到了你，请考虑点一个 ⭐ Star，谢谢！
 </p>
 
 ## 显示什么

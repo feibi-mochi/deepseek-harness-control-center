@@ -1,5 +1,5 @@
 {
-  "name": "dsh-wallet",
+  "name": "deepseek-harness-wallet",
   "description": "Balance monitoring, per-session spend tracking, token statistics, low-balance alerts, and an official recharge shortcut for DeepSeek Harness.",
   "version": "0.1.1",
   "type": "module",

@@ -18,7 +18,7 @@
 A resident one-line chip beside the composer: official DeepSeek (balance, session cost, tokens, one-click recharge, low-balance alert) plus the third-party token total. Accounting is bucketed per provider — a GLM session never shows a DeepSeek balance, and DeepSeek costs are never computed from GLM tokens.
 
 <p align="center">
-  If dsh-wallet helps you, please consider leaving a ⭐ Star. Thank you!
+  If deepseek-harness-wallet helps you, please consider leaving a ⭐ Star. Thank you!
 </p>
 
 ## What it shows
