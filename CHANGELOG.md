@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## 0.1.1 - 2026-08-14
+
+- Added floating window mode: detach the wallet panel into a draggable floating window with a persistent position, or minimize it to a dot that turns red when the balance is below the threshold.
+- Replaced the control-panel screenshot with floating-window screenshots in the READMEs.
+
 ## 0.1.0 - 2026-08-14
 
 - Initial public release.
