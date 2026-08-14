@@ -1,6 +1,6 @@
-# DeepSeek Harness Balance Monitor & Recharge Plugin
+# deepseek-harness-wallet
 
-### 余额监控和充值插件
+### DeepSeek Harness Balance Monitor & Recharge Plugin · 余额监控和充值插件
 
 <p align="center">
   <a href="./README.md">English</a> ·
