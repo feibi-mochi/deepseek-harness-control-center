@@ -49,6 +49,20 @@ dsh plugin --profile web add github:feibi-mochi/deepseek-harness-wallet
 
 Restart `dsh web`, then hard-refresh the page.
 
+### Update
+
+```sh
+dsh plugin --profile web update deepseek-harness-wallet
+```
+
+### Remove
+
+```sh
+dsh plugin --profile web remove deepseek-harness-wallet
+```
+
+> The package was renamed from `dsh-wallet` to `deepseek-harness-wallet` in 0.1.1. If you installed the old name, remove it with `dsh plugin --profile web remove dsh-wallet` first.
+
 ## Data & trust
 
 | Item | Behavior |

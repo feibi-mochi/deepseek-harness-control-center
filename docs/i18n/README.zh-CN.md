@@ -49,6 +49,20 @@ dsh plugin --profile web add github:feibi-mochi/deepseek-harness-wallet
 
 重启 `dsh web`，然后强制刷新页面。
 
+### 更新
+
+```sh
+dsh plugin --profile web update deepseek-harness-wallet
+```
+
+### 卸载
+
+```sh
+dsh plugin --profile web remove deepseek-harness-wallet
+```
+
+> 包名在 0.1.1 从 `dsh-wallet` 改为 `deepseek-harness-wallet`。如果之前装的是旧包名，请先执行 `dsh plugin --profile web remove dsh-wallet` 移除旧版，避免两份副本同时注册 UI。
+
 ## 数据与安全
 
 | 项目 | 行为 |
