@@ -4,6 +4,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   PRICE_POLICIES,
   isBeijingPeak,
@@ -17,6 +18,18 @@ import {
 function bj(y, m, d, h, min = 0) {
   return Date.UTC(y, m - 1, d, h - 8, min)
 }
+
+test('client bundle registers the loader under the package name', () => {
+  // client-modules verifies the boot graph row id (the package name) against
+  // the id the bundle passes to __ModuleLoader__.load; a mismatch aborts the
+  // whole plugin boot ("loaded without registering ..."). Regression guard
+  // for https://github.com/feibi-mochi/deepseek-harness-wallet/issues/1
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const match = client.match(/id:\s*'([^']+)'/)
+  assert.ok(match, 'lib/client.js must register a loader module id')
+  assert.equal(match[1], pkg.name, 'loader id must equal the package name')
+})
 
 test('policy table: since dates match the documented timeline', () => {
   assert.equal(PRICE_POLICIES.length, 3)

@@ -4,6 +4,7 @@ All notable changes to this project are documented here.
 
 ## 0.1.2 - 2026-08-15
 
+- Fixed the client bundle loader id to match the package name (`deepseek-harness-wallet`); 0.1.1 still registered the old `dsh-wallet` id, which aborted the whole plugin boot ("loaded without registering") after the rename. Regression test added.
 - Implemented the 2026-08-17 peak/off-peak pricing for the v4 models (Beijing 09:00–12:00 / 14:00–18:00 peak; off-peak is half the peak rate).
 - Fixed the v4 pricing effective date in the READMEs (2026-04-24, matching the V4 preview launch).
 - Balance total now prefers the CNY record and never sums mixed currencies (fixes wrong totals and false low-balance alerts on international accounts).
