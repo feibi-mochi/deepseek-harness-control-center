@@ -15,10 +15,14 @@ A zero-dependency, zero-build DeepSeek Harness Web plugin: a wallet chip beside 
 ## Install
 
 ```sh
-dsh plugin --profile web add github:feibi-mochi/deepseek-harness-wallet
+dsh plugin --profile web add deepseek-harness-wallet
 ```
 
+(The npm registry is the primary channel; fall back to `github:feibi-mochi/deepseek-harness-wallet` when npm is unavailable.)
+
 Then **restart `dsh web` and hard-refresh the page** — the client half injects on page load; without a hard refresh the chip will not appear.
+
+**Boot failure note (pre-0.1.2)**: if the page fails with `client-modules: bundle ... loaded without registering "deepseek-harness-wallet"`, the machine has the broken 0.1.1 build (client half registered the old `dsh-wallet` loader id). Fix: `dsh plugin --profile web remove deepseek-harness-wallet`, restart, then install ≥0.1.2 from npm and hard-refresh.
 
 ## Verify after install
 
