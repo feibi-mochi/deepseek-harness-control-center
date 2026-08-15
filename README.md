@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.1.1" src="https://img.shields.io/badge/version-0.1.1-5965d8">
+  <img alt="Version 0.1.2" src="https://img.shields.io/badge/version-0.1.2-5965d8">
   <img alt="DeepSeek Harness rc.6" src="https://img.shields.io/badge/dsh-0.1.0--rc.6-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -29,7 +29,7 @@ A resident one-line chip beside the composer: official DeepSeek (balance, sessio
 
 - **Official DeepSeek** — live balance (60s global refresh with fast boot retries), current-session cost (official pricing timeline, including the 2026-08-17 peak/off-peak rollout), and token breakdown.
 - **Third-party total** — current-session tokens (input / cache read / output). No balance guessing, no cost math, zero configuration.
-- **Click the chip** to open the detail panel: per-currency balance breakdown, cost and token splits, a freely editable low-balance threshold (two decimals, persisted globally), manual refresh, and a jump to the official recharge page (first click shows the domain for confirmation — anti-phishing).
+- **Click the chip** to open the detail panel: per-currency balance breakdown, cost and token splits, a freely editable low-balance threshold in CNY (two decimals, persisted globally; the chip compares the CNY balance, never a mixed-currency sum), manual refresh, and a jump to the official recharge page (first click shows the domain for confirmation — anti-phishing).
 - **Floating window mode** — from the detail panel, detach the wallet into a floating window you can drag anywhere (position remembered across reloads), or minimize it to a small dot; the dot turns red below the threshold.
 - **Low-balance alert** — below the threshold the chip turns red with a breathing animation and fires one desktop notification; it resets automatically once the balance recovers.
 - **Theme-native UI** — built entirely on `--dsw-alias-*` theme variables, so light and dark themes both render correctly; the panel closes when you click outside and flips open-direction near screen edges.
@@ -78,8 +78,12 @@ dsh plugin --profile web remove deepseek-harness-wallet
 CNY per 1M tokens, curated from official announcements (cache writes are not billed):
 
 - Since 2025-02-09 — deepseek-chat 2/8 (cache read 0.5), deepseek-reasoner 4/16 (cache read 1)
-- Since 2026-05-22 — v4-flash 1/2 (cache read 0.02), v4-pro 3/6 (cache read 0.025)
-- Since 2026-08-17 — peak/off-peak (Beijing 09:00–12:00 / 14:00–18:00 peak)
+- Since 2026-04-24 — v4-flash 1/2 (cache read 0.02), v4-pro 3/6 (cache read 0.025)
+- Since 2026-08-17 00:00 Beijing — peak/off-peak pricing for the v4 models (peak windows Beijing 09:00–12:00 / 14:00–18:00; off-peak is half the peak rate):
+  - v4-flash (off-peak / peak): cache read 0.05 / 0.10, input 1.5 / 3, output 4.5 / 9
+  - v4-pro (off-peak / peak): cache read 0.15 / 0.30, input 4.5 / 9, output 13.5 / 27
+
+deepseek-chat and deepseek-reasoner keep their flat rates. Costs are estimates; the API-returned balance is authoritative.
 
 ## Roadmap
 

@@ -9,7 +9,7 @@
  *  - a global low-balance threshold, persisted under DSH_HOME storages;
  *  - the /api/wallet routes the browser chip polls.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -21,6 +21,14 @@ const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
 const STORE_PATH = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'storages', 'wallet.json')
 const DEFAULT_THRESHOLD = 5
 const BALANCE_REFRESH_MS = 60_000
+
+// Beijing (UTC+8, no DST) peak windows: 09:00-12:00 and 14:00-18:00.
+const BEIJING_OFFSET_MS = 8 * 3600_000
+
+function isBeijingPeak(atMs) {
+  const hours = ((atMs + BEIJING_OFFSET_MS) % 86_400_000) / 3_600_000
+  return (hours >= 9 && hours < 12) || (hours >= 14 && hours < 18)
+}
 
 // Pricing timeline (CNY per 1M tokens; cacheWrite is not billed by DeepSeek).
 // Curated from the official announcements; later policies win per model.
@@ -39,17 +47,29 @@ const PRICE_POLICIES = [
       'deepseek-v4-pro': { cacheHit: 0.025, input: 3, output: 6 },
     },
   },
+  {
+    // 2026-08-17 00:00 Beijing = 2026-08-16T16:00Z; off-peak is half the peak rate.
+    since: Date.UTC(2026, 7, 16, 16),
+    peakOffPeak: true,
+    models: {
+      'deepseek-v4-flash': { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] },
+      'deepseek-v4-pro': { cacheHit: [0.15, 0.3], input: [4.5, 9], output: [13.5, 27] },
+    },
+  },
 ]
 
 function ratesFor(model, atMs) {
   let entry
   for (const policy of PRICE_POLICIES) {
-    if (atMs >= policy.since && policy.models[model] !== undefined) {
-      entry = policy.models[model]
-    }
+    if (atMs >= policy.since && policy.models[model] !== undefined) entry = policy
   }
   if (entry === undefined) return null
-  return entry
+  const rates = entry.models[model]
+  if (entry.peakOffPeak === true) {
+    const peak = isBeijingPeak(atMs) ? 1 : 0
+    return { cacheHit: rates.cacheHit[peak], input: rates.input[peak], output: rates.output[peak] }
+  }
+  return rates
 }
 
 function costOf(model, usage, atMs) {
@@ -69,9 +89,22 @@ function emptyBucket() {
   return { models: {} }
 }
 
+function normalizeThreshold(value) {
+  const parsed = Number.parseFloat(value)
+  if (!Number.isFinite(parsed)) return DEFAULT_THRESHOLD
+  return Math.min(100000, Math.max(0, Math.round(parsed * 100) / 100))
+}
+
 function loadStore() {
   try {
-    return JSON.parse(readFileSync(STORE_PATH, 'utf8'))
+    const parsed = JSON.parse(readFileSync(STORE_PATH, 'utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { threshold: DEFAULT_THRESHOLD, sessions: {} }
+    }
+    const sessions = parsed.sessions !== null && typeof parsed.sessions === 'object' && !Array.isArray(parsed.sessions)
+      ? parsed.sessions
+      : {}
+    return { threshold: normalizeThreshold(parsed.threshold), sessions }
   } catch {
     return { threshold: DEFAULT_THRESHOLD, sessions: {} }
   }
@@ -86,7 +119,9 @@ function scheduleSave(logger) {
     saveTimer = null
     try {
       mkdirSync(dirname(STORE_PATH), { recursive: true })
-      writeFileSync(STORE_PATH, JSON.stringify(store))
+      const tmp = STORE_PATH + '.tmp'
+      writeFileSync(tmp, JSON.stringify(store))
+      renameSync(tmp, STORE_PATH)
     } catch (error) {
       if (logger && typeof logger.warn === 'function') {
         logger.warn('dsh-wallet: failed to persist store: ' + String(error))
@@ -176,8 +211,22 @@ async function refreshBalance(ctx) {
 }
 
 function balanceTotal() {
+  const infos = balance.balances
+  if (infos.length === 0) return 0
+  // The chip and the threshold are denominated in CNY: prefer the CNY record
+  // instead of mixing it with e.g. a USD record for international accounts.
+  const cny = infos.find((info) => info.currency === 'CNY')
+  if (cny !== undefined) {
+    const value = Number.parseFloat(cny.total_balance)
+    if (Number.isFinite(value)) return value
+  }
+  // No CNY record: sum only when every record shares one currency.
+  if (!infos.every((info) => info.currency === infos[0].currency)) {
+    const first = Number.parseFloat(infos[0].total_balance)
+    return Number.isFinite(first) ? first : 0
+  }
   let total = 0
-  for (const info of balance.balances) {
+  for (const info of infos) {
     const value = Number.parseFloat(info.total_balance)
     if (Number.isFinite(value)) total += value
   }
@@ -258,9 +307,9 @@ export function apply(ctx, config) {
   config = config || {}
   // Threshold lives ONLY in the persisted store; an explicit row config may
   // still override it for power users, but the bundle patch sets none.
-  let threshold = store.threshold ?? DEFAULT_THRESHOLD
+  let threshold = store.threshold
   if (Number.isFinite(config.threshold)) {
-    threshold = config.threshold
+    threshold = normalizeThreshold(config.threshold)
     store.threshold = threshold
     scheduleSave(ctx.logger)
   }
@@ -290,12 +339,18 @@ export function apply(ctx, config) {
   // Staggered boot retries: the credentials seam or network may not be ready
   // at first mount; retry a few times so the chip shows a value without
   // waiting for the 60s cadence (or for the user to send a message).
-  for (const delay of [2000, 6000, 15000, 30000]) {
-    const retry = setTimeout(() => {
-      if (!balance.available) void refreshBalance(ctx)
-    }, delay)
-    if (typeof retry.unref === 'function') retry.unref()
-  }
+  ctx.effect(() => {
+    const retries = [2000, 6000, 15000, 30000].map((delay) => {
+      const retry = setTimeout(() => {
+        if (!balance.available) void refreshBalance(ctx)
+      }, delay)
+      if (typeof retry.unref === 'function') retry.unref()
+      return retry
+    })
+    return () => {
+      for (const retry of retries) clearTimeout(retry)
+    }
+  }, 'dsh-wallet: boot balance retries')
   const balanceTimer = setInterval(() => void refreshBalance(ctx), BALANCE_REFRESH_MS)
   if (typeof balanceTimer.unref === 'function') balanceTimer.unref()
 
@@ -351,6 +406,8 @@ export function apply(ctx, config) {
       disposeRefresh()
       disposeClear()
       clearInterval(balanceTimer)
+      clearTimeout(saveTimer)
+      saveTimer = null
     }
   }, 'dsh-wallet: routes')
 }
