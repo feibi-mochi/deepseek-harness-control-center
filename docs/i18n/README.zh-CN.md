@@ -43,6 +43,14 @@
 
 ## 安装
 
+从 npm 安装：
+
+```sh
+dsh plugin --profile web add deepseek-harness-wallet
+```
+
+或直接从 GitHub 安装：
+
 ```sh
 dsh plugin --profile web add github:feibi-mochi/deepseek-harness-wallet
 ```

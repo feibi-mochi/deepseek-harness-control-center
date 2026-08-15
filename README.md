@@ -43,6 +43,14 @@ A resident one-line chip beside the composer: official DeepSeek (balance, sessio
 
 ## Install
 
+From npm:
+
+```sh
+dsh plugin --profile web add deepseek-harness-wallet
+```
+
+or from GitHub directly:
+
 ```sh
 dsh plugin --profile web add github:feibi-mochi/deepseek-harness-wallet
 ```
