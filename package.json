@@ -15,6 +15,9 @@
     "cordis.patch.yml"
   ],
   "license": "MIT",
+  "scripts": {
+    "test": "node --test"
+  },
   "keywords": [
     "deepseek",
     "deepseek-harness",

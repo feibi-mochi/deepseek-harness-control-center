@@ -25,14 +25,14 @@ const BALANCE_REFRESH_MS = 60_000
 // Beijing (UTC+8, no DST) peak windows: 09:00-12:00 and 14:00-18:00.
 const BEIJING_OFFSET_MS = 8 * 3600_000
 
-function isBeijingPeak(atMs) {
+export function isBeijingPeak(atMs) {
   const hours = ((atMs + BEIJING_OFFSET_MS) % 86_400_000) / 3_600_000
   return (hours >= 9 && hours < 12) || (hours >= 14 && hours < 18)
 }
 
 // Pricing timeline (CNY per 1M tokens; cacheWrite is not billed by DeepSeek).
 // Curated from the official announcements; later policies win per model.
-const PRICE_POLICIES = [
+export const PRICE_POLICIES = [
   {
     since: Date.UTC(2025, 1, 9),
     models: {
@@ -58,7 +58,7 @@ const PRICE_POLICIES = [
   },
 ]
 
-function ratesFor(model, atMs) {
+export function ratesFor(model, atMs) {
   let entry
   for (const policy of PRICE_POLICIES) {
     if (atMs >= policy.since && policy.models[model] !== undefined) entry = policy
@@ -72,7 +72,7 @@ function ratesFor(model, atMs) {
   return rates
 }
 
-function costOf(model, usage, atMs) {
+export function costOf(model, usage, atMs) {
   const rates = ratesFor(model, atMs)
   if (rates === null) return null
   const input = (usage.inputTokens ?? usage.input ?? 0) * rates.input
@@ -89,7 +89,7 @@ function emptyBucket() {
   return { models: {} }
 }
 
-function normalizeThreshold(value) {
+export function normalizeThreshold(value) {
   const parsed = Number.parseFloat(value)
   if (!Number.isFinite(parsed)) return DEFAULT_THRESHOLD
   return Math.min(100000, Math.max(0, Math.round(parsed * 100) / 100))
@@ -210,9 +210,8 @@ async function refreshBalance(ctx) {
   }
 }
 
-function balanceTotal() {
-  const infos = balance.balances
-  if (infos.length === 0) return 0
+export function sumBalances(infos) {
+  if (!Array.isArray(infos) || infos.length === 0) return 0
   // The chip and the threshold are denominated in CNY: prefer the CNY record
   // instead of mixing it with e.g. a USD record for international accounts.
   const cny = infos.find((info) => info.currency === 'CNY')
@@ -220,10 +219,13 @@ function balanceTotal() {
     const value = Number.parseFloat(cny.total_balance)
     if (Number.isFinite(value)) return value
   }
-  // No CNY record: sum only when every record shares one currency.
+  // No (finite) CNY record: sum only when every record shares one currency.
   if (!infos.every((info) => info.currency === infos[0].currency)) {
-    const first = Number.parseFloat(infos[0].total_balance)
-    return Number.isFinite(first) ? first : 0
+    for (const info of infos) {
+      const value = Number.parseFloat(info.total_balance)
+      if (Number.isFinite(value)) return value
+    }
+    return 0
   }
   let total = 0
   for (const info of infos) {
@@ -231,6 +233,10 @@ function balanceTotal() {
     if (Number.isFinite(value)) total += value
   }
   return total
+}
+
+function balanceTotal() {
+  return sumBalances(balance.balances)
 }
 
 function sessionView(sessionId) {

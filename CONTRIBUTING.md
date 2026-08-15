@@ -20,6 +20,7 @@ Thanks for helping improve the DeepSeek Harness Balance Monitor & Recharge Plugi
    node --check index.js
    node --check lib/client.js
    node -e "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'))"
+   node --test
    ```
 
 Issues and pull requests are welcome in English or Chinese.
