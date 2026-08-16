@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img alt="版本 0.1.2" src="https://img.shields.io/badge/version-0.1.2-5965d8">
+  <img alt="版本 0.1.3" src="https://img.shields.io/badge/version-0.1.3-5965d8">
   <img alt="DeepSeek Harness rc.6" src="https://img.shields.io/badge/dsh-0.1.0--rc.6-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -24,12 +24,12 @@
 ## 显示什么
 
 ```
-余额 5.89 · 本场 0.72 · 官 18.8M | 三方 800K · ↗充
+余额 ¥5.89 · 本场 ¥0.72 · 官 18.8M | 三方 800K · ↗充
 ```
 
-- **官方 DeepSeek**——余额（60 秒全局刷新 + 启动快速重试）、本会话花费（官方价格时间线计价，含 2026-08-17 峰谷价）、token 拆分。
+- **官方 DeepSeek**——余额（60 秒全局刷新 + 启动快速重试）、本会话花费（每次用量按发生时价格锁定，含 2026-08-17 峰谷价）、token 拆分。
 - **第三方合计**——本会话 token（输入 / 缓存读 / 输出）。不算钱、不猜余额、零配置。
-- **点开面板**——币种余额拆分、花费与 token 明细、可自由填写的低余额阈值（人民币、两位小数、全局持久化；标签始终用人民币余额对比，绝不混币种相加）、手动刷新、跳转官方充值页（首次点击显示域名确认，防钓鱼）。
+- **点开面板**——按币种正确显示符号的余额拆分、花费与 token 明细、可自由填写的低余额阈值（人民币、两位小数、全局持久化；仅在有人民币余额时提醒，绝不跨币种比较或相加）、手动刷新、跳转官方充值页（首次点击显示域名确认，防钓鱼）。
 - **悬浮窗口**——从面板切出可自由拖动的悬浮钱包窗口（位置跨刷新记忆），或最小化为小圆点；低于阈值时圆点变红。
 - **低余额提醒**——低于阈值时标签变红呼吸 + 桌面通知一次，余额回升后自动复位。
 - **跟随主题**——全部使用 `--dsw-alias-*` 主题变量，浅色/深色主题自动适配；面板点外部自动关闭，靠边自动反向展开。
@@ -75,7 +75,7 @@ dsh plugin --profile web remove deepseek-harness-wallet
 
 | 项目 | 行为 |
 | --- | --- |
-| Token 计费 | 监听 `llm/stream` 事件，按 provider 分桶（`deepseek-official` 之外全部归第三方）、按会话隔离，多开会话互不串账。 |
+| Token 计费 | 监听 `llm/stream` 事件，按 provider 分桶（`deepseek-official` 之外全部归第三方）、按会话隔离；每次用量同时锁定当时的官方价格，会话与峰谷时段都不串账。 |
 | 余额 | 凭证库 `DEEPSEEK_API_KEY` 只在本机流转，仅作为 `Authorization` 头发往官方 `/user/balance` 接口。 |
 | 会话日志 | 插件不写入任何事件；数据存于 `$DSH_HOME/storages/wallet.json`。 |
 | 模型可见性 | 不注册工具、不注入提示词、零 token 消耗。 |
@@ -91,7 +91,7 @@ CNY/百万 token，整理自官方公告（缓存写入不计费）：
   - v4-flash（空闲 / 高峰）：缓存读 0.05 / 0.10、输入 1.5 / 3、输出 4.5 / 9
   - v4-pro（空闲 / 高峰）：缓存读 0.15 / 0.30、输入 4.5 / 9、输出 13.5 / 27
 
-deepseek-chat 与 deepseek-reasoner 维持固定价格。花费为估算值，以官方接口返回的余额为准。
+deepseek-chat 与 deepseek-reasoner 维持固定价格。每次用量在到达时计价；从 0.1.2 升级时，旧 token 记录会按升级时价格做一次迁移，此后不再随时段变化。花费为估算值，以官方接口返回的余额为准。
 
 ## Roadmap
 

@@ -9,15 +9,25 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    name: Node ${{ matrix.node }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22.19.0, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
       - name: Validate package metadata
         run: node -e "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'))"
       - name: Check host syntax
         run: node --check index.js
       - name: Check browser syntax
         run: node --check lib/client.js
+      - name: Run regression tests
+        run: npm test
+      - name: Verify publishable package
+        run: npm pack --dry-run

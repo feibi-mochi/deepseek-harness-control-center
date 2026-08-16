@@ -21,6 +21,7 @@ const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
 const STORE_PATH = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'storages', 'wallet.json')
 const DEFAULT_THRESHOLD = 5
 const BALANCE_REFRESH_MS = 60_000
+const STORE_VERSION = 2
 
 // Beijing (UTC+8, no DST) peak windows: 09:00-12:00 and 14:00-18:00.
 const BEIJING_OFFSET_MS = 8 * 3600_000
@@ -75,9 +76,10 @@ export function ratesFor(model, atMs) {
 export function costOf(model, usage, atMs) {
   const rates = ratesFor(model, atMs)
   if (rates === null) return null
-  const input = (usage.inputTokens ?? usage.input ?? 0) * rates.input
-  const cacheRead = (usage.cacheReadTokens ?? usage.cacheRead ?? 0) * rates.cacheHit
-  const output = (usage.outputTokens ?? usage.output ?? 0) * rates.output
+  usage = usage !== null && typeof usage === 'object' ? usage : {}
+  const input = finiteCounter(usage.inputTokens ?? usage.input) * rates.input
+  const cacheRead = finiteCounter(usage.cacheReadTokens ?? usage.cacheRead) * rates.cacheHit
+  const output = finiteCounter(usage.outputTokens ?? usage.output) * rates.output
   return (input + cacheRead + output) / 1e6
 }
 
@@ -85,7 +87,8 @@ function emptyCounters() {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }
 }
 
-function emptyBucket() {
+function emptyBucket(priced) {
+  if (priced === true) return { models: {}, cost: 0, priced: true }
   return { models: {} }
 }
 
@@ -95,47 +98,109 @@ export function normalizeThreshold(value) {
   return Math.min(100000, Math.max(0, Math.round(parsed * 100) / 100))
 }
 
+function finiteCounter(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
+}
+
+function normalizeCounters(value) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  return {
+    input: finiteCounter(source.input),
+    output: finiteCounter(source.output),
+    cacheRead: finiteCounter(source.cacheRead),
+    cacheWrite: finiteCounter(source.cacheWrite),
+    reasoning: finiteCounter(source.reasoning),
+  }
+}
+
+function normalizeModels(value) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const models = {}
+  for (const [model, counters] of Object.entries(source)) {
+    if (model === '__proto__' || model === 'prototype' || model === 'constructor') continue
+    models[model] = normalizeCounters(counters)
+  }
+  return models
+}
+
+function migratedOfficialBucket(value, atMs) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const models = normalizeModels(source.models)
+  if (typeof source.cost === 'number' && Number.isFinite(source.cost) && source.cost >= 0 && typeof source.priced === 'boolean') {
+    return { models, cost: source.cost, priced: source.priced }
+  }
+  let cost = 0
+  let priced = true
+  for (const [model, counters] of Object.entries(models)) {
+    const valueAtMigration = costOf(model, counters, atMs)
+    if (valueAtMigration === null) priced = false
+    else cost += valueAtMigration
+  }
+  return { models, cost, priced }
+}
+
+export function normalizeStoreData(value, atMs = Date.now()) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const rawSessions = source.sessions !== null && typeof source.sessions === 'object' && !Array.isArray(source.sessions)
+    ? source.sessions
+    : {}
+  const sessions = {}
+  for (const [sessionId, value] of Object.entries(rawSessions)) {
+    if (sessionId === '__proto__' || sessionId === 'prototype' || sessionId === 'constructor') continue
+    const rawSession = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+    sessions[sessionId] = {
+      official: migratedOfficialBucket(rawSession.official, atMs),
+      third: { models: normalizeModels(rawSession.third && rawSession.third.models) },
+    }
+  }
+  const normalized = { version: STORE_VERSION, threshold: normalizeThreshold(source.threshold), sessions }
+  return { store: normalized, migrated: JSON.stringify(source) !== JSON.stringify(normalized) }
+}
+
 function loadStore() {
   try {
-    const parsed = JSON.parse(readFileSync(STORE_PATH, 'utf8'))
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { threshold: DEFAULT_THRESHOLD, sessions: {} }
-    }
-    const sessions = parsed.sessions !== null && typeof parsed.sessions === 'object' && !Array.isArray(parsed.sessions)
-      ? parsed.sessions
-      : {}
-    return { threshold: normalizeThreshold(parsed.threshold), sessions }
+    return normalizeStoreData(JSON.parse(readFileSync(STORE_PATH, 'utf8')))
   } catch {
-    return { threshold: DEFAULT_THRESHOLD, sessions: {} }
+    return {
+      store: { version: STORE_VERSION, threshold: DEFAULT_THRESHOLD, sessions: {} },
+      migrated: false,
+    }
   }
 }
 
 let saveTimer = null
-let store = loadStore()
+const loadedStore = loadStore()
+let store = loadedStore.store
+let storeNeedsSave = loadedStore.migrated
+
+function persistStore(logger) {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  try {
+    mkdirSync(dirname(STORE_PATH), { recursive: true })
+    const tmp = STORE_PATH + '.tmp'
+    writeFileSync(tmp, JSON.stringify(store))
+    renameSync(tmp, STORE_PATH)
+  } catch (error) {
+    if (logger && typeof logger.warn === 'function') {
+      logger.warn('dsh-wallet: failed to persist store: ' + String(error))
+    }
+  }
+}
 
 function scheduleSave(logger) {
   if (saveTimer !== null) return
-  saveTimer = setTimeout(() => {
-    saveTimer = null
-    try {
-      mkdirSync(dirname(STORE_PATH), { recursive: true })
-      const tmp = STORE_PATH + '.tmp'
-      writeFileSync(tmp, JSON.stringify(store))
-      renameSync(tmp, STORE_PATH)
-    } catch (error) {
-      if (logger && typeof logger.warn === 'function') {
-        logger.warn('dsh-wallet: failed to persist store: ' + String(error))
-      }
-    }
-  }, 500)
+  saveTimer = setTimeout(() => persistStore(logger), 500)
 }
 
 function addUsage(counters, usage) {
-  counters.input += usage.inputTokens ?? 0
-  counters.output += usage.outputTokens ?? 0
-  counters.cacheRead += usage.cacheReadTokens ?? 0
-  counters.cacheWrite += usage.cacheWriteTokens ?? 0
-  counters.reasoning += usage.reasoningTokens ?? 0
+  counters.input += finiteCounter(usage.inputTokens)
+  counters.output += finiteCounter(usage.outputTokens)
+  counters.cacheRead += finiteCounter(usage.cacheReadTokens)
+  counters.cacheWrite += finiteCounter(usage.cacheWriteTokens)
+  counters.reasoning += finiteCounter(usage.reasoningTokens)
 }
 
 function bucketTotals(bucket) {
@@ -150,25 +215,37 @@ function bucketTotals(bucket) {
   return totals
 }
 
-function recordUsage(options, usage) {
+export function addOfficialUsage(bucket, model, usage, atMs) {
+  if (!Object.hasOwn(bucket.models, model)) bucket.models[model] = emptyCounters()
+  addUsage(bucket.models[model], usage)
+  const cost = costOf(model, usage, atMs)
+  if (cost === null) bucket.priced = false
+  else bucket.cost += cost
+}
+
+function recordUsage(options, usage, atMs = Date.now()) {
   const sessionId = options.sessionId
   const provider = options.provider
   const model = options.model ?? options.modelName ?? ''
-  if (sessionId === undefined || provider === undefined || provider === '') return
-  if (store.sessions[sessionId] === undefined) {
-    store.sessions[sessionId] = { official: emptyBucket(), third: emptyBucket() }
+  if (typeof sessionId !== 'string' || sessionId === '' || typeof provider !== 'string' || provider === '') return
+  if (typeof model !== 'string' || model === '__proto__' || model === 'prototype' || model === 'constructor') return
+  if (sessionId === '__proto__' || sessionId === 'prototype' || sessionId === 'constructor') return
+  if (!Object.hasOwn(store.sessions, sessionId)) {
+    store.sessions[sessionId] = { official: emptyBucket(true), third: emptyBucket(false) }
   }
   const session = store.sessions[sessionId]
   const bucket = provider === OFFICIAL_PROVIDER ? session.official : session.third
-  if (bucket.models[model] === undefined) {
-    bucket.models[model] = emptyCounters()
+  if (provider === OFFICIAL_PROVIDER) addOfficialUsage(bucket, model, usage, atMs)
+  else {
+    if (!Object.hasOwn(bucket.models, model)) bucket.models[model] = emptyCounters()
+    addUsage(bucket.models[model], usage)
   }
-  addUsage(bucket.models[model], usage)
 }
 
 let balance = { fetchedAt: 0, available: false, balances: [], error: null }
+let balanceRefresh = null
 
-async function refreshBalance(ctx) {
+async function performBalanceRefresh(ctx) {
   const credentials = ctx.get('credentials')
   if (credentials === undefined) {
     balance = { fetchedAt: Date.now(), available: false, balances: [], error: 'no credentials service' }
@@ -210,6 +287,14 @@ async function refreshBalance(ctx) {
   }
 }
 
+function refreshBalance(ctx) {
+  if (balanceRefresh !== null) return balanceRefresh
+  balanceRefresh = performBalanceRefresh(ctx).finally(() => {
+    balanceRefresh = null
+  })
+  return balanceRefresh
+}
+
 export function sumBalances(infos) {
   if (!Array.isArray(infos) || infos.length === 0) return 0
   // The chip and the threshold are denominated in CNY: prefer the CNY record
@@ -235,6 +320,14 @@ export function sumBalances(infos) {
   return total
 }
 
+export function balanceCurrency(infos) {
+  if (!Array.isArray(infos)) return null
+  const cny = infos.find((info) => info.currency === 'CNY' && Number.isFinite(Number.parseFloat(info.total_balance)))
+  if (cny !== undefined) return 'CNY'
+  const firstFinite = infos.find((info) => Number.isFinite(Number.parseFloat(info.total_balance)))
+  return firstFinite && typeof firstFinite.currency === 'string' ? firstFinite.currency.toUpperCase() : null
+}
+
 function balanceTotal() {
   return sumBalances(balance.balances)
 }
@@ -245,21 +338,18 @@ function sessionView(sessionId) {
   if (session === undefined) return { official: null, third: null }
   const official = bucketTotals(session.official)
   const third = bucketTotals(session.third)
-  const now = Date.now()
-  let cost = 0
-  let priced = true
-  for (const model of Object.keys(session.official.models)) {
-    const value = costOf(model, session.official.models[model], now)
-    if (value === null) priced = false
-    else cost += value
-  }
   return {
-    official: { tokens: official, cost: priced ? cost : null, models: session.official.models },
+    official: {
+      tokens: official,
+      cost: session.official.priced === true ? session.official.cost : null,
+      models: session.official.models,
+    },
     third: { tokens: third, models: session.third.models },
   }
 }
 
 function snapshotView(sessionId, threshold) {
+  const currency = balanceCurrency(balance.balances)
   return {
     ok: true,
     balance: {
@@ -267,17 +357,23 @@ function snapshotView(sessionId, threshold) {
       fetchedAt: balance.fetchedAt,
       balances: balance.balances,
       total: balance.available ? balanceTotal() : null,
+      currency,
       error: balance.available ? null : balance.error,
     },
     session: sessionView(sessionId),
     threshold,
-    lowBalance: balance.available && threshold > 0 && balanceTotal() < threshold,
+    // The configured threshold is CNY-denominated; do not compare unlike
+    // currencies for international accounts that do not expose a CNY row.
+    lowBalance: balance.available && currency === 'CNY' && threshold > 0 && balanceTotal() < threshold,
     rechargeUrl: RECHARGE_URL,
   }
 }
 
 function json(res, status, body) {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  })
   res.end(JSON.stringify(body))
 }
 
@@ -285,12 +381,15 @@ function readBody(req, cap) {
   cap = cap || 4096
   return new Promise((resolve) => {
     let size = 0
+    let tooLarge = false
     const parts = []
     req.on('data', (chunk) => {
       size += chunk.length
       if (size <= cap) parts.push(chunk)
+      else tooLarge = true
     })
     req.on('end', () => {
+      if (tooLarge) return resolve(null)
       try {
         resolve(JSON.parse(Buffer.concat(parts).toString('utf8') || '{}'))
       } catch {
@@ -311,6 +410,10 @@ function sessionParam(req) {
 
 export function apply(ctx, config) {
   config = config || {}
+  if (storeNeedsSave) {
+    storeNeedsSave = false
+    scheduleSave(ctx.logger)
+  }
   // Threshold lives ONLY in the persisted store; an explicit row config may
   // still override it for power users, but the bundle patch sets none.
   let threshold = store.threshold
@@ -324,16 +427,18 @@ export function apply(ctx, config) {
     const downstream = next()
     return (async function* () {
       let usage = null
+      let usageAt = 0
       try {
         for await (const chunk of downstream) {
           if (chunk !== null && chunk !== undefined && chunk.type === 'usage' && chunk.usage !== undefined) {
             usage = chunk.usage
+            usageAt = Date.now()
           }
           yield chunk
         }
       } finally {
         if (usage !== null) {
-          recordUsage(options, usage)
+          recordUsage(options, usage, usageAt)
           scheduleSave(ctx.logger)
         }
       }
@@ -412,8 +517,7 @@ export function apply(ctx, config) {
       disposeRefresh()
       disposeClear()
       clearInterval(balanceTimer)
-      clearTimeout(saveTimer)
-      saveTimer = null
+      if (saveTimer !== null) persistStore(ctx.logger)
     }
   }, 'dsh-wallet: routes')
 }
