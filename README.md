@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.1.3" src="https://img.shields.io/badge/version-0.1.3-5965d8">
+  <img alt="Version 0.2.0" src="https://img.shields.io/badge/version-0.2.0-5965d8">
   <img alt="DeepSeek Harness rc.6" src="https://img.shields.io/badge/dsh-0.1.0--rc.6-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -16,6 +16,14 @@
 **The multi-provider wallet chip for the DeepSeek Harness Web GUI.**
 
 A resident one-line chip beside the composer: official DeepSeek (balance, session cost, tokens, one-click recharge, low-balance alert) plus the third-party token total. Accounting is bucketed per provider — a GLM session never shows a DeepSeek balance, and DeepSeek costs are never computed from GLM tokens.
+
+## Multi-account
+
+- Open the wallet panel → **账户管理** to add accounts (name + API key), switch the active one, or remove them.
+- The first account added becomes the active account automatically and is synced into the credentials seam.
+- Switching prompts a confirmation because it changes **LLM billing** for subsequent requests: the switch writes the account key into the credentials seam (`credentials.set('DEEPSEEK_API_KEY', ...)`), and since the llm-deepseek provider route resolves that reference per request, the very next LLM call is billed with the new account — no restart needed.
+- Account keys are stored plaintext in `$DSH_HOME/storages/accounts.json`; the UI only ever shows masked keys. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
+- If `DEEPSEEK_API_KEY` is supplied by the launching environment, switching is refused with a clear error (the credentials provider rejects shadowed writes) — unset it in your shell to enable switching.
 
 <p align="center">
   If deepseek-harness-wallet helps you, please consider leaving a ⭐ Star. Thank you!
@@ -76,7 +84,8 @@ dsh plugin --profile web remove deepseek-harness-wallet
 | Item | Behavior |
 | --- | --- |
 | Token accounting | Listens to the `llm/stream` event and buckets per provider (`deepseek-official` vs. everything else) and per session; each usage event also locks its contemporaneous official price, so multiple sessions and pricing windows never mix. |
-| Balance | The `DEEPSEEK_API_KEY` from the credentials seam never leaves this machine except as the `Authorization` header of the official `/user/balance` request. |
+| Balance | The key from the credentials seam (or the active account's key) never leaves this machine except as the `Authorization` header of the official `/user/balance` request. |
+| Accounts | Keys live in `$DSH_HOME/storages/accounts.json` (plaintext, matching the harness's own credential storage); the UI only ever shows masked keys, and switching writes the chosen key into the credentials seam for LLM billing. |
 | Session log | The plugin writes no events; its data lives in `$DSH_HOME/storages/wallet.json`. |
 | Model surface | No tools registered, no prompt injection, zero token cost. |
 | Recharge | The URL is hardcoded to the official `https://platform.deepseek.com/top_up` and is not user-configurable (anti-phishing). |

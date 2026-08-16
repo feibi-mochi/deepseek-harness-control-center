@@ -4,7 +4,9 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import {
   PRICE_POLICIES,
@@ -16,6 +18,9 @@ import {
   normalizeStoreData,
   normalizeThreshold,
   sumBalances,
+  normalizeAccountsData,
+  maskKey,
+  validateApiKey,
 } from '../index.js'
 
 // Beijing wall-clock helper: ms timestamp for a Beijing local time.
@@ -372,4 +377,155 @@ test('client uses native controls, keeps first-click recharge confirmation, and 
   tree = renderer.render(Component, { sessionId: 'session-1' })
   const confirmation = findElement(tree, (element) => element.props && element.props.role === 'dialog' && element.props['aria-modal'] === 'true')
   assert.ok(confirmation, 'the first recharge click must render a confirmation dialog even while details are closed')
+})
+
+test('client renders the 账户管理 section inside the detail panel', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const { Component } = walletComponent(exports)
+
+  let tree = renderer.render(Component, { sessionId: 'session-1' })
+  const mainButton = findElement(tree, (element) => element.type === 'button' && element.props.className === 'dshw_chipMain')
+  assert.ok(mainButton)
+  mainButton.props.onClick({})
+  tree = renderer.render(Component, { sessionId: 'session-1' })
+  const title = findElement(tree, (element) => element.type === 'div' && element.props.className === 'dshw_title' && element.props.children === '\u8d26\u6237\u7ba1\u7406')
+  assert.ok(title, 'the detail panel must contain the \u8d26\u6237\u7ba1\u7406 section')
+})
+
+test('normalizeAccountsData: filters malformed entries and validates activeId', () => {
+  const data = normalizeAccountsData({
+    accounts: [
+      { id: 'acc_1', name: '  Alice  ', apiKey: 'sk-alice-1234567890' },
+      { id: '', name: 'bad', apiKey: 'sk-x' },
+      { name: 'no id', apiKey: 'sk-x' },
+      null,
+      'junk',
+      { id: 'acc_2', name: 'Bob', apiKey: 'sk-bob-1234567890', createdAt: 123 },
+    ],
+    activeId: 'acc_1',
+  })
+  assert.equal(data.accounts.length, 2)
+  assert.equal(data.accounts[0].name, 'Alice')
+  assert.equal(data.accounts[0].createdAt > 0, true)
+  assert.equal(data.accounts[1].createdAt, 123)
+  assert.equal(data.activeId, 'acc_1')
+  // An activeId pointing at a missing account is dropped.
+  assert.equal(normalizeAccountsData({ accounts: data.accounts, activeId: 'acc_missing' }).activeId, null)
+  // Garbage input degrades to an empty store.
+  assert.deepEqual(normalizeAccountsData(null), { version: 1, accounts: [], activeId: null })
+  assert.deepEqual(normalizeAccountsData([1, 2]), { version: 1, accounts: [], activeId: null })
+})
+
+test('maskKey and validateApiKey: masking and key sanity checks', () => {
+  assert.equal(maskKey(''), '')
+  assert.equal(maskKey(undefined), '')
+  assert.equal(maskKey('short'), '***')
+  assert.equal(maskKey('sk-1234567890'), 'sk-1***7890')
+  assert.equal(validateApiKey(''), 'API key must not be empty')
+  assert.equal(validateApiKey('   '), 'API key must not be empty')
+  assert.equal(validateApiKey('short'), 'API key looks too short')
+  assert.equal(validateApiKey('has space key123'), 'API key must not contain whitespace')
+  assert.equal(validateApiKey('sk-abcdefgh'), null)
+  assert.equal(validateApiKey(42), 'API key must be a string')
+})
+
+/**
+ * Load a fresh module instance whose DSH_HOME points at an empty temp dir, so
+ * account tests start from a deterministic empty store and never touch real
+ * user state (~/.dsh/storages/accounts.json). The unique query keeps each
+ * instance separate from the statically imported one.
+ */
+async function freshAccountsModule() {
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-accounts-'))
+  process.env.DSH_HOME = dir
+  return import('../index.js?accounts-' + dir.replace(/[\\/]/g, '_'))
+}
+
+test('multi-account store: first account auto-activates, list masks keys, remove clears activeId', async () => {
+  const mod = await freshAccountsModule()
+
+  const first = mod.addAccount('Alice', 'sk-alice-1234567890')
+  assert.equal(first.ok, true)
+  assert.ok(first.account.id.startsWith('acc_'))
+  // The first account becomes the active one automatically.
+  assert.equal(mod.activeAccount().id, first.account.id)
+
+  const second = mod.addAccount('Bob', 'sk-bob-1234567890')
+  assert.equal(second.ok, true)
+  assert.equal(mod.activeAccount().id, first.account.id) // still Alice
+
+  // Invalid input is rejected without touching the store.
+  assert.equal(mod.addAccount('', 'sk-x').ok, false)
+  assert.equal(mod.addAccount('Carol', 'short').ok, false)
+  assert.equal(mod.accountListView().accounts.length, 2)
+
+  const view = mod.accountListView()
+  assert.equal(view.activeId, first.account.id)
+  assert.equal(view.accounts[0].active, true)
+  assert.equal(view.accounts[1].active, false)
+  assert.ok(!view.accounts[0].maskedKey.includes('alice'))
+  assert.equal(view.accounts[0].maskedKey, 'sk-a***7890')
+
+  // Removing a missing id fails; removing the active account clears activeId.
+  assert.equal(mod.removeAccount('acc_missing').ok, false)
+  assert.equal(mod.removeAccount(first.account.id).ok, true)
+  assert.equal(mod.activeAccount(), null)
+  assert.equal(mod.accountListView().activeId, null)
+})
+
+test('activateAccount: writes the key into the credentials seam and hot-switches', async () => {
+  const mod = await freshAccountsModule()
+  // Balance refresh fires after activation; keep it off the real network.
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => { throw new Error('network disabled in tests') }
+  try {
+    const added = mod.addAccount('Alice', 'sk-alice-1234567890')
+    const bob = mod.addAccount('Bob', 'sk-bob-1234567890')
+    const written = []
+    const ctx = {
+      logger: { warn() {} },
+      get(key) {
+        if (key === 'credentials') {
+          return {
+            async set(ref, value) { written.push([ref, value]) },
+            async resolve() { return undefined },
+          }
+        }
+        return undefined
+      },
+    }
+
+    const result = await mod.activateAccount(ctx, bob.account.id)
+    assert.equal(result.ok, true)
+    assert.deepEqual(written, [['DEEPSEEK_API_KEY', 'sk-bob-1234567890']])
+    assert.equal(mod.activeAccount().id, bob.account.id)
+    await new Promise((resolve) => setTimeout(resolve, 0)) // drain the refresh
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('activateAccount: missing accounts and refused credential writes fail safely', async () => {
+  const mod = await freshAccountsModule()
+  const added = mod.addAccount('Alice', 'sk-alice-1234567890')
+  const ctx = {
+    logger: { warn() {} },
+    get(key) {
+      if (key === 'credentials') {
+        return {
+          async set() { throw new Error('shadowed write refused') },
+          async resolve() { return undefined },
+        }
+      }
+      return undefined
+    },
+  }
+
+  assert.equal((await mod.activateAccount(ctx, 'acc_missing')).ok, false)
+  const failed = await mod.activateAccount(ctx, added.account.id)
+  assert.equal(failed.ok, false)
+  assert.equal(failed.error, 'shadowed write refused')
+  // The stored activeId is left untouched on failure.
+  assert.equal(mod.activeAccount().id, added.account.id)
 })

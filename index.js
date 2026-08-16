@@ -7,8 +7,16 @@
  *  - a global DeepSeek account balance cache (official Get User Balance
  *    endpoint, refreshed every 60s);
  *  - a global low-balance threshold, persisted under DSH_HOME storages;
+ *  - multi-account management (accounts.json): list / add / remove accounts and
+ *    hot-switch the active one. Activating an account writes its key into the
+ *    credentials seam via `credentials.set('DEEPSEEK_API_KEY', ...)`, and the
+ *    llm-deepseek provider route resolves that reference per request, so the
+ *    next LLM call is billed with the new account — no restart needed. Balance
+ *    lookups prefer the active account's key and fall back to the credentials
+ *    seam when no account is active;
  *  - the /api/wallet routes the browser chip polls.
  */
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -18,7 +26,11 @@ export const inject = ['webServer']
 
 const OFFICIAL_PROVIDER = 'deepseek-official'
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
-const STORE_PATH = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'storages', 'wallet.json')
+const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+const STORE_PATH = join(DSH_HOME, 'storages', 'wallet.json')
+const ACCOUNTS_PATH = join(DSH_HOME, 'storages', 'accounts.json')
+const ACCOUNTS_VERSION = 1
+const CREDENTIAL_REF = 'DEEPSEEK_API_KEY'
 const DEFAULT_THRESHOLD = 5
 const BALANCE_REFRESH_MS = 60_000
 const STORE_VERSION = 2
@@ -195,6 +207,177 @@ function scheduleSave(logger) {
   saveTimer = setTimeout(() => persistStore(logger), 500)
 }
 
+// ---------------------------------------------------------------------------
+// Multi-account store (accounts.json): list, add, remove, hot-switch.
+// Keys are stored plaintext next to .credentials.yaml, matching the harness's
+// own credential storage; the API surface only ever exposes masked keys.
+// ---------------------------------------------------------------------------
+
+function emptyAccounts() {
+  return { version: ACCOUNTS_VERSION, accounts: [], activeId: null }
+}
+
+export function normalizeAccountsData(value) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const rawAccounts = Array.isArray(source.accounts) ? source.accounts : []
+  const accounts = []
+  for (const raw of rawAccounts) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const id = typeof raw.id === 'string' && raw.id !== '' ? raw.id : null
+    const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+    const apiKey = typeof raw.apiKey === 'string' ? raw.apiKey : ''
+    if (id === null || name === '' || apiKey === '') continue
+    accounts.push({
+      id,
+      name,
+      apiKey,
+      createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
+    })
+  }
+  const activeId =
+    typeof source.activeId === 'string' && accounts.some((account) => account.id === source.activeId)
+      ? source.activeId
+      : null
+  return { version: ACCOUNTS_VERSION, accounts, activeId }
+}
+
+function loadAccounts() {
+  try {
+    return normalizeAccountsData(JSON.parse(readFileSync(ACCOUNTS_PATH, 'utf8')))
+  } catch {
+    return emptyAccounts()
+  }
+}
+
+let accountsSaveTimer = null
+let accounts = loadAccounts()
+
+function persistAccounts(logger) {
+  if (accountsSaveTimer !== null) {
+    clearTimeout(accountsSaveTimer)
+    accountsSaveTimer = null
+  }
+  try {
+    mkdirSync(dirname(ACCOUNTS_PATH), { recursive: true })
+    const tmp = ACCOUNTS_PATH + '.tmp'
+    writeFileSync(tmp, JSON.stringify(accounts))
+    renameSync(tmp, ACCOUNTS_PATH)
+  } catch (error) {
+    if (logger && typeof logger.warn === 'function') {
+      logger.warn('dsh-wallet: failed to persist accounts: ' + String(error))
+    }
+  }
+}
+
+function scheduleAccountsSave(logger) {
+  if (accountsSaveTimer !== null) return
+  accountsSaveTimer = setTimeout(() => persistAccounts(logger), 500)
+}
+
+export function findAccount(id) {
+  return accounts.accounts.find((account) => account.id === id) ?? null
+}
+
+export function activeAccount() {
+  if (accounts.activeId === null) return null
+  return findAccount(accounts.activeId)
+}
+
+export function maskKey(key) {
+  if (typeof key !== 'string' || key === '') return ''
+  if (key.length <= 8) return '***'
+  return key.slice(0, 4) + '***' + key.slice(-4)
+}
+
+export function validateApiKey(key) {
+  if (typeof key !== 'string') return 'API key must be a string'
+  const trimmed = key.trim()
+  if (trimmed === '') return 'API key must not be empty'
+  if (trimmed.length < 8) return 'API key looks too short'
+  if (/\s/.test(trimmed)) return 'API key must not contain whitespace'
+  return null
+}
+
+export function addAccount(name, apiKey) {
+  if (typeof name !== 'string' || name.trim() === '') return { ok: false, error: 'Account name must not be empty' }
+  const keyError = validateApiKey(apiKey)
+  if (keyError !== null) return { ok: false, error: keyError }
+  const account = {
+    id: 'acc_' + randomUUID(),
+    name: name.trim(),
+    apiKey: apiKey.trim(),
+    createdAt: Date.now(),
+  }
+  accounts.accounts.push(account)
+  // The first account becomes the active one automatically; the caller is
+  // responsible for syncing it into the credentials seam via activateAccount.
+  if (accounts.activeId === null) accounts.activeId = account.id
+  return { ok: true, account }
+}
+
+export function removeAccount(id) {
+  const index = accounts.accounts.findIndex((account) => account.id === id)
+  if (index < 0) return { ok: false, error: 'account not found' }
+  accounts.accounts.splice(index, 1)
+  // Deliberately NOT unsetting the credentials seam: the key currently in
+  // .credentials.yaml keeps working for LLM billing; the UI just reports
+  // "no active account" and balance falls back to the seam key.
+  if (accounts.activeId === id) accounts.activeId = null
+  return { ok: true }
+}
+
+export function accountListView() {
+  return {
+    accounts: accounts.accounts.map((account) => ({
+      id: account.id,
+      name: account.name,
+      maskedKey: maskKey(account.apiKey),
+      createdAt: account.createdAt,
+      active: account.id === accounts.activeId,
+    })),
+    activeId: accounts.activeId,
+  }
+}
+
+/**
+ * The key used for balance lookups: the active account's key when one is
+ * active, otherwise whatever the credentials seam resolves (backwards
+ * compatible with the original plugin's single-key behavior).
+ */
+async function resolveBalanceKey(ctx) {
+  const active = activeAccount()
+  if (active !== null && active.apiKey !== '') return active.apiKey
+  const credentials = ctx.get('credentials')
+  if (credentials === undefined) return undefined
+  const resolved = await credentials.resolve(CREDENTIAL_REF)
+  return resolved ? resolved.value : undefined
+}
+
+/**
+ * Hot-switch the active account: persist the choice AND write the account key
+ * into the credentials seam so the llm-deepseek route (which resolves the key
+ * per request) bills the next LLM call with this account.
+ * @returns `{ ok: true, account }` or `{ ok: false, error }`. On failure the
+ * stored activeId is left untouched.
+ */
+export async function activateAccount(ctx, id) {
+  const account = findAccount(id)
+  if (account === null) return { ok: false, error: 'account not found' }
+  const credentials = ctx.get('credentials')
+  if (credentials === undefined) return { ok: false, error: 'credentials service unavailable' }
+  try {
+    await credentials.set(CREDENTIAL_REF, account.apiKey)
+  } catch (error) {
+    // e.g. the launching environment supplies DEEPSEEK_API_KEY read-only, so
+    // the write is shadowed and refused by the credentials provider.
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+  accounts.activeId = account.id
+  scheduleAccountsSave(ctx.logger)
+  void refreshBalance(ctx)
+  return { ok: true, account: { id: account.id, name: account.name, maskedKey: maskKey(account.apiKey) } }
+}
+
 function addUsage(counters, usage) {
   counters.input += finiteCounter(usage.inputTokens)
   counters.output += finiteCounter(usage.outputTokens)
@@ -252,8 +435,7 @@ async function performBalanceRefresh(ctx) {
     return
   }
   try {
-    const resolved = await credentials.resolve('DEEPSEEK_API_KEY')
-    const key = resolved ? resolved.value : undefined
+    const key = await resolveBalanceKey(ctx)
     if (key === undefined || key === '') {
       balance = { fetchedAt: Date.now(), available: false, balances: [], error: 'no API key' }
       return
@@ -350,6 +532,7 @@ function sessionView(sessionId) {
 
 function snapshotView(sessionId, threshold) {
   const currency = balanceCurrency(balance.balances)
+  const active = activeAccount()
   return {
     ok: true,
     balance: {
@@ -366,6 +549,11 @@ function snapshotView(sessionId, threshold) {
     // currencies for international accounts that do not expose a CNY row.
     lowBalance: balance.available && currency === 'CNY' && threshold > 0 && balanceTotal() < threshold,
     rechargeUrl: RECHARGE_URL,
+    accounts: {
+      activeId: accounts.activeId,
+      activeName: active !== null ? active.name : null,
+      count: accounts.accounts.length,
+    },
   }
 }
 
@@ -511,13 +699,75 @@ export function apply(ctx, config) {
         return json(res, 200, { ok: true })
       },
     })
+    // -- multi-account routes -------------------------------------------------
+    const disposeAccounts = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/wallet/accounts',
+      handler: async (req, res) => {
+        if (req.method === 'GET') return json(res, 200, { ok: true, ...accountListView() })
+        if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        const body = await readBody(req)
+        if (body === null || typeof body.name !== 'string' || typeof body.apiKey !== 'string') {
+          return json(res, 400, { ok: false, error: 'name and apiKey are required' })
+        }
+        const needSync = accounts.activeId === null
+        const result = addAccount(body.name, body.apiKey)
+        if (!result.ok) return json(res, 400, { ok: false, error: result.error })
+        scheduleAccountsSave(ctx.logger)
+        let sync = null
+        if (needSync) {
+          // First account: activate it so the LLM seam follows the new key.
+          sync = await activateAccount(ctx, result.account.id)
+        }
+        return json(res, 200, {
+          ok: true,
+          account: {
+            id: result.account.id,
+            name: result.account.name,
+            maskedKey: maskKey(result.account.apiKey),
+            active: result.account.id === accounts.activeId,
+          },
+          synced: sync === null ? false : sync.ok,
+          syncError: sync !== null && !sync.ok ? sync.error : undefined,
+        })
+      },
+    })
+    const disposeActivate = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/wallet/accounts/activate',
+      handler: async (req, res) => {
+        if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        const body = await readBody(req)
+        if (body === null || typeof body.id !== 'string') return json(res, 400, { ok: false, error: 'id is required' })
+        const result = await activateAccount(ctx, body.id)
+        if (!result.ok) return json(res, 400, { ok: false, error: result.error })
+        return json(res, 200, { ok: true, account: result.account })
+      },
+    })
+    const disposeRemove = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/wallet/accounts/remove',
+      handler: async (req, res) => {
+        if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        const body = await readBody(req)
+        if (body === null || typeof body.id !== 'string') return json(res, 400, { ok: false, error: 'id is required' })
+        const result = removeAccount(body.id)
+        if (!result.ok) return json(res, 400, { ok: false, error: result.error })
+        scheduleAccountsSave(ctx.logger)
+        return json(res, 200, { ok: true, ...accountListView() })
+      },
+    })
     return () => {
       disposeSnapshot()
       disposeThreshold()
       disposeRefresh()
       disposeClear()
+      disposeAccounts()
+      disposeActivate()
+      disposeRemove()
       clearInterval(balanceTimer)
       if (saveTimer !== null) persistStore(ctx.logger)
+      if (accountsSaveTimer !== null) persistAccounts(ctx.logger)
     }
   }, 'dsh-wallet: routes')
 }

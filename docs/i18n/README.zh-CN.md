@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img alt="版本 0.1.3" src="https://img.shields.io/badge/version-0.1.3-5965d8">
+  <img alt="版本 0.2.0" src="https://img.shields.io/badge/version-0.2.0-5965d8">
   <img alt="DeepSeek Harness rc.6" src="https://img.shields.io/badge/dsh-0.1.0--rc.6-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -16,6 +16,14 @@
 **DeepSeek Harness Web 的多供应商钱包标签。**
 
 输入框旁一行常驻标签：官方 DeepSeek 的（余额、本会话花费、token、一键充值、低余额提醒）与第三方合计 token，按供应商分桶记账，永不错位——GLM 会话不会显示 DeepSeek 的余额，DeepSeek 的账单不会拿 GLM 的 token 来算。
+
+## 多账户
+
+- 打开钱包面板 → **账户管理**，可添加账户（名称 + API Key）、切换当前账户或删除账户。
+- 添加的第一个账户自动成为当前账户，并同步写入凭证库。
+- 切换会弹确认框，因为它会改变**后续 LLM 请求的计费**：切换把该账户 key 写入凭证库（`credentials.set('DEEPSEEK_API_KEY', ...)`），llm-deepseek 路由按请求解析该引用，因此**下一次 LLM 调用即用新账户计费，无需重启**。
+- 账户 key 明文存储于 `$DSH_HOME/storages/accounts.json`，界面只显示掩码。余额查询优先使用当前账户 key，无激活账户时回退到系统凭证库。
+- 若启动环境已提供 `DEEPSEEK_API_KEY`，切换会被明确拒绝（凭证提供方拒绝遮蔽写入）——在 shell 中取消该环境变量即可启用切换。
 
 <p align="center">
   如果 deepseek-harness-wallet 帮到了你，请考虑点一个 ⭐ Star，谢谢！
@@ -76,7 +84,8 @@ dsh plugin --profile web remove deepseek-harness-wallet
 | 项目 | 行为 |
 | --- | --- |
 | Token 计费 | 监听 `llm/stream` 事件，按 provider 分桶（`deepseek-official` 之外全部归第三方）、按会话隔离；每次用量同时锁定当时的官方价格，会话与峰谷时段都不串账。 |
-| 余额 | 凭证库 `DEEPSEEK_API_KEY` 只在本机流转，仅作为 `Authorization` 头发往官方 `/user/balance` 接口。 |
+| 余额 | 凭证库（或当前账户）的 key 只在本机流转，仅作为 `Authorization` 头发往官方 `/user/balance` 接口。 |
+| 账户 | key 存于 `$DSH_HOME/storages/accounts.json`（明文，与 harness 自身凭证存储一致）；界面只显示掩码，切换会把所选 key 写入凭证库用于 LLM 计费。 |
 | 会话日志 | 插件不写入任何事件；数据存于 `$DSH_HOME/storages/wallet.json`。 |
 | 模型可见性 | 不注册工具、不注入提示词、零 token 消耗。 |
 | 充值 | 地址硬编码为官方 `https://platform.deepseek.com/top_up`，不可配置（防钓鱼）。 |

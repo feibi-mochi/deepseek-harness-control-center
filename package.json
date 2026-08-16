@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-wallet",
-  "description": "Balance monitoring, per-session spend tracking, token statistics, low-balance alerts, and an official recharge shortcut for DeepSeek Harness.",
-  "version": "0.1.3",
+  "description": "Balance monitoring, per-session spend tracking, token statistics, low-balance alerts, official recharge shortcut, and multi-account management with hot account switching (view balance AND switch the LLM billing key) for DeepSeek Harness.",
+  "version": "0.2.0",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -26,6 +26,8 @@
     "token-tracking",
     "cost-tracking",
     "wallet",
+    "multi-account",
+    "account-switching",
     "llm",
     "agentic-ai"
   ],
