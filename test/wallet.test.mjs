@@ -314,6 +314,10 @@ test('README heroes stay compact while product overviews remain structured below
   for (const term of ['把重要信息收回对话旁边', '需要时出现，平时不打扰', '可以扩展，但不隐藏能力边界']) {
     assert.match(chinese, new RegExp(term), `Chinese introduction is missing ${term}`)
   }
+  assert.match(english, /cannot be enabled by configuring the plugin alone/i)
+  assert.match(english, /integrations\/dsh-session-delete\/AGENT_PROMPT\.md/)
+  assert.match(chinese, /不是在插件里改个配置就能启用/)
+  assert.match(chinese, /integrations\/dsh-session-delete\/AGENT_PROMPT\.md/)
 })
 
 test('policy table: since dates match the documented timeline', () => {
