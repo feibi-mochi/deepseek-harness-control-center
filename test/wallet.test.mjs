@@ -180,14 +180,24 @@ test('client bundle registers the loader under the package name', () => {
   assert.equal(match[1], pkg.name, 'loader id must equal the package name')
 })
 
-test('release READMEs are image-free and every local Markdown target exists', () => {
+test('release READMEs use only approved status badges and every local Markdown target exists', () => {
   const documents = [
     resolve(REPO_ROOT, 'README.md'),
     resolve(REPO_ROOT, 'docs/i18n/README.zh-CN.md'),
   ]
   for (const document of documents) {
     const markdown = readFileSync(document, 'utf8')
-    assert.doesNotMatch(markdown, /!\[[^\]]*\]\([^)]+\)/, `${document} must not depend on screenshots`)
+    const images = [...markdown.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)]
+    assert.ok(images.length >= 5, `${document} must retain a compact graphical badge row`)
+    for (const [, , target] of images) {
+      assert.match(
+        target,
+        /^(?:https:\/\/img\.shields\.io\/|https:\/\/github\.com\/feibi-mochi\/deepseek-harness-control-center\/actions\/workflows\/validate\.yml\/badge\.svg$)/,
+        `${document} contains a non-badge image: ${target}`,
+      )
+    }
+    assert.doesNotMatch(markdown, /docs\/assets\/(?:floating|above-threshold|below-threshold)/i)
+    assert.doesNotMatch(markdown, /<img\b/i)
     assert.doesNotMatch(markdown, /^###\s+(?:Screenshots|截图)\s*$/m)
     for (const target of localMarkdownTargets(markdown)) {
       assert.equal(existsSync(resolve(dirname(document), target)), true, `${document} points to missing ${target}`)
@@ -283,11 +293,17 @@ test('documentation distinguishes host-gated deletion from clearing wallet data'
   assert.match(chinese, /不会删除对话/)
 })
 
-test('project introductions are detailed product narratives rather than screenshot captions', () => {
-  const english = readProjectFile('README.md').split('## What it does', 1)[0]
-  const chinese = readProjectFile('docs/i18n/README.zh-CN.md').split('## 能做什么', 1)[0]
+test('README heroes stay compact while detailed product narratives remain below features', () => {
+  const englishReadme = readProjectFile('README.md')
+  const chineseReadme = readProjectFile('docs/i18n/README.zh-CN.md')
+  const englishHero = englishReadme.split('## What it does', 1)[0]
+  const chineseHero = chineseReadme.split('## 能做什么', 1)[0]
+  assert.ok(englishHero.length < 1800, 'English hero must remain quickly scannable')
+  assert.ok(chineseHero.length < 1200, 'Chinese hero must remain quickly scannable')
+  const english = englishReadme.split('## Why this exists')[1].split('## Install')[0]
+  const chinese = chineseReadme.split('## 为什么做这个项目')[1].split('## 安装')[0]
   assert.ok(english.length >= 4000, 'English introduction must remain detailed')
-  assert.ok(chinese.length >= 1800, 'Chinese introduction must remain detailed')
+  assert.ok(chinese.length >= 1700, 'Chinese introduction must remain detailed')
   for (const term of ['balance', 'accounting', 'recharge', 'reminders', 'move freely', 'Permanent session deletion', 'local storage', 'falls back']) {
     assert.match(english, new RegExp(term, 'i'), `English introduction is missing ${term}`)
   }
