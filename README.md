@@ -14,6 +14,8 @@
 
 > A local-first companion that keeps account status, per-conversation usage, completion reminders, official recharge, flexible layout, and host-gated session controls beside the DSH composer.
 
+> If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
+
 ## What it does
 
 ```
@@ -31,7 +33,7 @@
 - **Theme-native UI** — built entirely on `--dsw-alias-*` theme variables, so light and dark themes both render correctly; the panel closes when you click outside and flips open-direction near screen edges.
 - **Clear current-session wallet data** — one button clears only the open conversation's token/cost records; it does not delete the conversation, and every other conversation is untouched.
 
-## Why this exists
+## Project overview
 
 DeepSeek Harness can keep several conversations and model providers active at once, but the information needed to manage them is normally scattered: the official account balance is on one page, token usage is buried in stream events, a long-running conversation may finish in a background tab, and session cleanup is separate again. DeepSeek Harness Control Center brings those signals and controls into one small surface beside the composer while retaining `deepseek-harness-wallet` as its installation and compatibility identifier. It is designed to answer three everyday questions without interrupting the conversation: **How much official balance remains? What has this conversation used? Does anything need my attention?**
 
@@ -46,8 +48,6 @@ Session controls keep two very different operations separate. **Clear current-se
 The trust model is intentionally narrow. The plugin registers no model tools, injects no prompt text, and adds no model-token overhead. Its host-side accounting is kept in the local DSH storage, while layout and reminder preferences use browser-compatible local storage. The existing DSH credential is used only for the official balance request, and recharge navigation is fixed to the official DeepSeek domain. The plugin does not collect payment details, estimate third-party money values without a price source, or merge balances across currencies.
 
 Compatibility is based on capabilities rather than operating-system names. A normal DSH Web environment uses standards-based browser behavior; restricted Electron, Tauri, or other desktop shells can provide a small adapter for notifications, storage, and external links without changing accounting or UI logic. Optional features degrade visibly when a capability is absent. This keeps the project useful as a broader Harness monitoring and session-control center while leaving room for future provider adapters, history views, and other management features without changing the established npm package identity.
-
-> If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
 
 ## Install
 

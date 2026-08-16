@@ -300,10 +300,14 @@ test('README heroes stay compact while detailed product narratives remain below 
   const chineseHero = chineseReadme.split('## 能做什么', 1)[0]
   assert.ok(englishHero.length < 1800, 'English hero must remain quickly scannable')
   assert.ok(chineseHero.length < 1200, 'Chinese hero must remain quickly scannable')
-  const english = englishReadme.split('## Why this exists')[1].split('## Install')[0]
-  const chinese = chineseReadme.split('## 为什么做这个项目')[1].split('## 安装')[0]
+  assert.match(englishHero, /consider leaving a ⭐ Star/, 'English Star prompt must remain in the hero')
+  assert.match(chineseHero, /考虑点一个 ⭐ Star/, 'Chinese Star prompt must remain in the hero')
+  const english = englishReadme.split('## Project overview')[1].split('## Install')[0]
+  const chinese = chineseReadme.split('## 项目介绍')[1].split('## 安装')[0]
   assert.ok(english.length >= 4000, 'English introduction must remain detailed')
   assert.ok(chinese.length >= 1700, 'Chinese introduction must remain detailed')
+  assert.doesNotMatch(english, /consider leaving a ⭐ Star/, 'English Star prompt must not trail the overview')
+  assert.doesNotMatch(chinese, /考虑点一个 ⭐ Star/, 'Chinese Star prompt must not trail the overview')
   for (const term of ['balance', 'accounting', 'recharge', 'reminders', 'move freely', 'Permanent session deletion', 'local storage', 'falls back']) {
     assert.match(english, new RegExp(term, 'i'), `English introduction is missing ${term}`)
   }
