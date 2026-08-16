@@ -1,0 +1,1586 @@
+diff --git a/docs/subsystems/persistence.i18n.yaml b/docs/subsystems/persistence.i18n.yaml
+index 2950610..9064854 100644
+--- a/docs/subsystems/persistence.i18n.yaml
++++ b/docs/subsystems/persistence.i18n.yaml
+@@ -2,5 +2,5 @@
+ # side as of the last confirmed-consistent state. Both languages carry equal authority;
+ # after editing either side, bring the other along and re-record with:
+ #   pnpm run verify-translation-pairing --write docs/subsystems/persistence.md
+-persistence.md: 5b1b224e419aca205baba69894ed64467b8fb4e1
+-persistence.zh.md: a91e7d66b92270c82287d054e619b665e96ea206
++persistence.md: 7af9a74785ed88a7e66b2d90856c256d68f47da1
++persistence.zh.md: cd587d3ca843bb81c0fb5026b618b18e085e3b8d
+diff --git a/docs/subsystems/persistence.md b/docs/subsystems/persistence.md
+index 5b1b224..7af9a74 100644
+--- a/docs/subsystems/persistence.md
++++ b/docs/subsystems/persistence.md
+@@ -295,6 +295,16 @@ abstract create(meta: SessionHeader): Promise<void>
+  */
+ abstract append(id: SessionId, events: readonly SessionEvent[]): Promise<void>
+ 
++/**
++ * Permanently remove one materialized session artifact. Callers must first
++ * release every live Session owner; implementations serialize deletion with
++ * queued writes and refuse identities reserved for resume. Shared,
++ * content-addressed attachments are deliberately outside this operation.
++ * @param _id - session identity to remove.
++ * @returns whether a durable artifact existed and was removed.
++ */
++delete(_id: SessionId): Promise<boolean>
++
+ /**
+  * Prepare the exact unpublished Session used by resume. Implementations may
+  * reuse object graphs retained by an earlier {@link inspect} after confirming
+diff --git a/docs/subsystems/persistence.zh.md b/docs/subsystems/persistence.zh.md
+index a91e7d6..cd587d3 100644
+--- a/docs/subsystems/persistence.zh.md
++++ b/docs/subsystems/persistence.zh.md
+@@ -295,6 +295,16 @@ abstract create(meta: SessionHeader): Promise<void>
+  */
+ abstract append(id: SessionId, events: readonly SessionEvent[]): Promise<void>
+ 
++/**
++ * Permanently remove one materialized session artifact. Callers must first
++ * release every live Session owner; implementations serialize deletion with
++ * queued writes and refuse identities reserved for resume. Shared,
++ * content-addressed attachments are deliberately outside this operation.
++ * @param _id - session identity to remove.
++ * @returns whether a durable artifact existed and was removed.
++ */
++delete(_id: SessionId): Promise<boolean>
++
+ /**
+  * Prepare the exact unpublished Session used by resume. Implementations may
+  * reuse object graphs retained by an earlier {@link inspect} after confirming
+diff --git a/docs/subsystems/workspace.i18n.yaml b/docs/subsystems/workspace.i18n.yaml
+index d9643a1..30eb218 100644
+--- a/docs/subsystems/workspace.i18n.yaml
++++ b/docs/subsystems/workspace.i18n.yaml
+@@ -2,5 +2,5 @@
+ # side as of the last confirmed-consistent state. Both languages carry equal authority;
+ # after editing either side, bring the other along and re-record with:
+ #   pnpm run verify-translation-pairing --write docs/subsystems/workspace.md
+-workspace.md: b15b07982b08ebaf63c49584ef27923ec97bb283
+-workspace.zh.md: 253648d96787c4b384065f599750e3082d0eaf33
++workspace.md: 933f31613aa5b74c85265ff88dbf48e8c5ececd2
++workspace.zh.md: 88ea96b8a21933af2009b28b56c803ff984e95cc
+diff --git a/docs/subsystems/workspace.md b/docs/subsystems/workspace.md
+index b15b079..933f316 100644
+--- a/docs/subsystems/workspace.md
++++ b/docs/subsystems/workspace.md
+@@ -212,6 +212,14 @@ insertBefore(id: WorkspaceId, beforeId?: WorkspaceId): Promise<readonly Workspac
+  */
+ archiveSession(sessionId: SessionId): Promise<void>
+ 
++/**
++ * Remove every durable Workspace/archive reference to a session before its
++ * log is permanently deleted. This does not delete persistence itself; the
++ * caller owns that final irreversible step and may safely retry it.
++ * @param sessionId - session identity being forgotten.
++ */
++forgetSession(sessionId: SessionId): Promise<void>
++
+ /**
+  * Resolve by canonical directory path without creating or mutating a
+  * workspace. A missing path rejects during `realpath`; an existing unowned
+diff --git a/docs/subsystems/workspace.zh.md b/docs/subsystems/workspace.zh.md
+index 253648d..88ea96b 100644
+--- a/docs/subsystems/workspace.zh.md
++++ b/docs/subsystems/workspace.zh.md
+@@ -212,6 +212,14 @@ insertBefore(id: WorkspaceId, beforeId?: WorkspaceId): Promise<readonly Workspac
+  */
+ archiveSession(sessionId: SessionId): Promise<void>
+ 
++/**
++ * Remove every durable Workspace/archive reference to a session before its
++ * log is permanently deleted. This does not delete persistence itself; the
++ * caller owns that final irreversible step and may safely retry it.
++ * @param sessionId - session identity being forgotten.
++ */
++forgetSession(sessionId: SessionId): Promise<void>
++
+ /**
+  * Resolve by canonical directory path without creating or mutating a
+  * workspace. A missing path rejects during `realpath`; an existing unowned
+diff --git a/packages/api/remotes/src/agent-lookup.ts b/packages/api/remotes/src/agent-lookup.ts
+index 3551d6b..f7c232b 100644
+--- a/packages/api/remotes/src/agent-lookup.ts
++++ b/packages/api/remotes/src/agent-lookup.ts
+@@ -1,7 +1,7 @@
+ /** Host BFF policy for resolving Remote Agent and Session identities. */
+ 
+ import type { Context } from '@deepseek-ai/cordis'
+-import type { Agent, AgentOptions, AgentSetup } from '@deepseek-ai/dsh-agent'
++import type { Agent, AgentHandle, AgentOptions, AgentSetup } from '@deepseek-ai/dsh-agent'
+ import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
+ import type {} from '@deepseek-ai/dsh-session-persistence'
+ import { TypertLookupFailure } from '@deepseek-ai/dsh-typert-protocol'
+@@ -36,6 +36,8 @@ export interface ApiRemoteAgentOptions {
+   readonly setup?: (
+     session: { meta: SessionHeader; events: readonly SessionEvent[] },
+   ) => AgentSetup | Promise<AgentSetup>
++  /** Retain the cold-resume capability for later permanent deletion. */
++  readonly retainHandle?: (handle: AgentHandle) => void
+ }
+ 
+ /** Cold identity absent from the durable session store. */
+@@ -164,6 +166,7 @@ export function createApiRemoteAgentResolver(
+             ...options.agentOptions === undefined ? {} : { agentOptions: options.agentOptions() },
+             ...setup === undefined ? {} : { setup },
+           })
++          options.retainHandle?.(handle)
+           return handle.agent
+         } finally {
+           resumes.delete(sessionId)
+diff --git a/packages/client/connection/src/client/fixture.ts b/packages/client/connection/src/client/fixture.ts
+index dd05664..0bdff7a 100644
+--- a/packages/client/connection/src/client/fixture.ts
++++ b/packages/client/connection/src/client/fixture.ts
+@@ -2358,6 +2358,37 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
+         }
+         return ok(request, { sessionId: child.sessionId })
+       },
++      delete: async (request) => {
++        const { sessionId } = request.payload
++        const index = sessions.findIndex(session => session.sessionId === sessionId)
++        if (index === -1) {
++          return err(request, {
++            code: 'session-not-found', message: `no session ${sessionId}`, details: { sessionId },
++          })
++        }
++        const target = sessions[index]
++        if (target?.running === true) {
++          return err(request, {
++            code: 'agent-busy', message: `session ${sessionId} is running`, details: { reason: 'session-running' },
++          })
++        }
++        sessions.splice(index, 1)
++        logs.delete(sessionId)
++        modelSelections.delete(sessionId)
++        const archivedIndex = archivedSessionIds.indexOf(sessionId)
++        if (archivedIndex !== -1) {
++          archivedSessionIds.splice(archivedIndex, 1)
++          emitHost({ type: 'host/archived-sessions-changed', archivedSessionIds: [...archivedSessionIds] })
++        }
++        for (const workspace of workspaces) {
++          if (!workspace.sessionIds.includes(sessionId)) continue
++          workspace.sessionIds = workspace.sessionIds.filter(id => id !== sessionId)
++          workspace.updatedAt = new Date().toISOString()
++          emitHost({ type: 'host/workspace-changed', workspace: { ...workspace } })
++        }
++        emitHost({ type: 'host/session-removed', sessionId })
++        return ok(request, { deleted: true as const })
++      },
+       history: async (request) => {
+         const log = logs.get(request.payload.sessionId) ?? []
+         // Snapshot at request time, deliver after the transit delay (mirrors a real host under latency).
+@@ -3080,6 +3111,7 @@ export class FixtureApiClient extends AbstractApiClient {
+       case 'session.list': return this.api.sessions.list(request)
+       case 'session.search': return this.api.sessions.search(request, signal)
+       case 'session.create': return this.api.sessions.create(request)
++      case 'session.delete': return this.api.sessions.delete(request)
+       case 'session.history': return this.api.sessions.history(request)
+       case 'session.models': return this.api.sessions.models(request)
+       case 'session.selectModel': return this.api.sessions.selectModel(request)
+diff --git a/packages/client/connection/tests/fake-api.client.ts b/packages/client/connection/tests/fake-api.client.ts
+index bee4fc0..a2b78d7 100644
+--- a/packages/client/connection/tests/fake-api.client.ts
++++ b/packages/client/connection/tests/fake-api.client.ts
+@@ -70,6 +70,7 @@ export class FakeApiClient implements IApiClient {
+     () => Promise.resolve(ok({ attachment: { attachmentId: 'a' as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1 }, data: 'AA==' }))
+   onUpdateQueue: (payload: unknown) => Promise<RpcResponse<{ accepted: true }>> = () => Promise.resolve(ok({ accepted: true as const }))
+   onCancel: (payload: unknown) => Promise<RpcResponse<{ accepted: true }>> = () => Promise.resolve(ok({ accepted: true as const }))
++  onDelete: (payload: unknown) => Promise<RpcResponse<{ deleted: true }>> = () => Promise.resolve(ok({ deleted: true as const }))
+   onDescribe: (payload: unknown) => Promise<RpcResponse<{
+     version: string
+     cwd: string
+@@ -110,6 +111,7 @@ export class FakeApiClient implements IApiClient {
+       return this.record('session.search', payload, this.onSearch(payload))
+     },
+     create: (payload: unknown) => this.record('session.create', payload, this.onCreate(payload)),
++    delete: (payload: unknown) => this.record('session.delete', payload, this.onDelete(payload)),
+     history: (payload: { sessionId: SessionId; beforeSeq?: number; maxMessages?: number }) =>
+       this.record('session.history', payload, this.onHistory(payload)),
+     models: (payload: unknown) => this.record('session.models', payload, this.onModels(payload)),
+diff --git a/packages/client/runtime/src/client/contract/sessions.ts b/packages/client/runtime/src/client/contract/sessions.ts
+index 27b9d2d..a03e770 100644
+--- a/packages/client/runtime/src/client/contract/sessions.ts
++++ b/packages/client/runtime/src/client/contract/sessions.ts
+@@ -39,6 +39,8 @@ export interface ISessions {
+    * @param id - session id (must exist in the list; unknown ids fail loud).
+    */
+   open(id: SessionId): void
++  /** Permanently delete one idle ordinary session's durable log and navigation references. */
++  delete(id: SessionId): Promise<void>
+   /**
+    * Open a healthy catalog child through its exact direct-parent address.
+    * @param address - catalog-derived parent and child ids.
+diff --git a/packages/client/runtime/src/client/sessions/manager.ts b/packages/client/runtime/src/client/sessions/manager.ts
+index 13aa20d..57c33df 100644
+--- a/packages/client/runtime/src/client/sessions/manager.ts
++++ b/packages/client/runtime/src/client/sessions/manager.ts
+@@ -568,6 +568,15 @@ export class SessionManager {
+     }
+   }
+ 
++  /** Permanently delete one idle ordinary session through the Host. */
++  async delete(sessionId: SessionId): Promise<RpcResult<{ deleted: true }>> {
++    try {
++      return (await this.api.sessions.delete({ sessionId })).result
++    } catch (error: unknown) {
++      return transportError(error)
++    }
++  }
++
+   /**
+    * Contract session.fork; on success merge the child into summaries
+    * immediately (same synchronous-addressability guarantee as create). The
+diff --git a/packages/client/runtime/src/client/sessions/service.ts b/packages/client/runtime/src/client/sessions/service.ts
+index c66da4e..cdb9ba1 100644
+--- a/packages/client/runtime/src/client/sessions/service.ts
++++ b/packages/client/runtime/src/client/sessions/service.ts
+@@ -489,6 +489,12 @@ export class SessionRuntime implements ISessions {
+     return result.value.sessionId
+   }
+ 
++  /** Permanently delete one idle ordinary session. */
++  async delete(sessionId: SessionId): Promise<void> {
++    const result = await this.manager.delete(sessionId)
++    if (!result.ok) throw new Error(result.error.message)
++  }
++
+   /**
+    * Fork a session from a completed-turn prefix of the source (same
+    * synchronous-addressability guarantee as {@link SessionRuntime.create}:
+diff --git a/packages/client/runtime/tests/fake-api.client.ts b/packages/client/runtime/tests/fake-api.client.ts
+index 33a0efb..bd8b928 100644
+--- a/packages/client/runtime/tests/fake-api.client.ts
++++ b/packages/client/runtime/tests/fake-api.client.ts
+@@ -103,6 +103,7 @@ export class FakeApiClient implements IApiClient {
+     () => Promise.resolve(ok({ attachment: { attachmentId: 'a' as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1 }, data: 'AA==' }))
+   onUpdateQueue: (payload: unknown) => Promise<RpcResponse<{ accepted: true }>> = () => Promise.resolve(ok({ accepted: true as const }))
+   onCancel: (payload: unknown) => Promise<RpcResponse<{ accepted: true }>> = () => Promise.resolve(ok({ accepted: true as const }))
++  onDelete: (payload: unknown) => Promise<RpcResponse<{ deleted: true }>> = () => Promise.resolve(ok({ deleted: true as const }))
+ 
+   onDescribe: (payload: unknown) => Promise<RpcResponse<{
+     version: string
+@@ -144,6 +145,7 @@ export class FakeApiClient implements IApiClient {
+       return this.record('session.search', payload, this.onSearch(payload))
+     },
+     create: (payload: unknown) => this.record('session.create', payload, this.onCreate(payload)),
++    delete: (payload: unknown) => this.record('session.delete', payload, this.onDelete(payload)),
+     history: (payload: { sessionId: SessionId; beforeSeq?: number; maxMessages?: number }) =>
+       this.record('session.history', payload, this.onHistory(payload)),
+     models: (payload: unknown) => this.record('session.models', payload, this.onModels(payload)),
+diff --git a/packages/client/ui-workspace/README.md b/packages/client/ui-workspace/README.md
+index 8878aa4..c8cbd6e 100644
+--- a/packages/client/ui-workspace/README.md
++++ b/packages/client/ui-workspace/README.md
+@@ -8,7 +8,7 @@ The browser renders grouped or flat Session rows from the global runtime hooks a
+ 
+ Collapsed search is one header action beside the view and add actions. In the rail, add and search render as 36px controls on the shell's shared horizontal entry path. Activating search expands the field across the header; an outside click collapses only a query that is empty after trimming, while the clear control always resets and collapses it. A non-blank search query replaces either browsing mode with one flat result list: case-insensitive title and Workspace substring matches appear immediately, while a 250 ms debounced Host request adds ranked current-conversation content matches and snippets. The English search input and its defensive request path remove NUL, cap the query at the wire schema's 500 UTF-16 code units without splitting a surrogate pair, and preserve the existing debounce and cancellation behavior. Each new query aborts the preceding request; a failed content search leaves metadata matches visible with a warning. The list is capped at 20, asks the user to narrow broader queries, and opens the selected Session without clearing the query or jumping to a specific event.
+ 
+-The picker lists real Host Workspace entities through the global `useWorkspaces` hook. Selecting a Workspace invokes the slot owner's `onPick` callback to retarget the frontend Session object. Distinct canonical paths remain separate id-keyed Workspaces when their basenames and display titles match; the sidebar hover detail exposes the full path. Each registration declares a **directory-flow child hole** (`single` kind: `conversation.hero.workspace.directoryFlow` / `sidebar.workspaces.directoryFlow`) that the composed picker package's client half fills with its picking interaction — the [`-native`](../../host/directory-picker-native/README.md) backend's renderless OS-chooser driver today, an in-app browsing dialog under a `-browse` composition. The flat **Add workspace...** action renders only while the surface's hole is occupied (occupancy read per menu render; an empty hole means the composition has no picking affordance — the seam's documented no-flow default, under which the sidebar header drops its add button rather than offering a dead one). This package owns the trigger and the adoption: the occupant reports one picked path per open through the hole's owner conversation (`open`/`busy`/`onPicked`/`onCancel`/`onError`), and the owner adopts it through the object layer, selecting the committed Workspace only after its list projection has refreshed; cancellation is silent, and errors land in the retryable folder dialog whose **Choose again** reopens the flow. Adding has exactly one route: the occupant's own create-folder affordance already covers a brand-new directory, so no separate create-by-name dialog exists. A menu only appears where there is something to choose between — with no Workspace listed, the anchor gesture raises the flow directly instead of a one-row popover, and it waits for the list baseline before treating an empty list as final. The runtime Session and Workspace services own materialization. The Workspace row's Delete action opens a confirmation that states the retention boundary, blocks duplicate submission, and keeps failures open; success removes the group while its Sessions remain under Ungrouped. The Session row's Rename action opens the same browser-owned dialog pattern prefilled with the row's display title: no client-side conflict rule exists (the host normalizes and may reject with `title-invalid`, rendered in the dialog alert), and confirming an unchanged title is deliberately allowed — it pins the current automatic title against regeneration. The Session row's Archive action commits without a confirmation dialog (non-destructive: the log and the workspace accounting slot remain) through `ctx.workspaces.archiveSession`; the row disappears from every grouping surface — workspace groups, Ungrouped, content search, and the flat list — when the archive-set echo lands, and failures are console diagnostics that leave the tree unchanged. A blank New Session row is a pure placeholder: it renders no row menu and no time label (nothing has happened in it yet), so rename, fork, and archive first apply once the first prompt lands.
++The picker lists real Host Workspace entities through the global `useWorkspaces` hook. Selecting a Workspace invokes the slot owner's `onPick` callback to retarget the frontend Session object. Distinct canonical paths remain separate id-keyed Workspaces when their basenames and display titles match; the sidebar hover detail exposes the full path. Each registration declares a **directory-flow child hole** (`single` kind: `conversation.hero.workspace.directoryFlow` / `sidebar.workspaces.directoryFlow`) that the composed picker package's client half fills with its picking interaction — the [`-native`](../../host/directory-picker-native/README.md) backend's renderless OS-chooser driver today, an in-app browsing dialog under a `-browse` composition. The flat **Add workspace...** action renders only while the surface's hole is occupied (occupancy read per menu render; an empty hole means the composition has no picking affordance — the seam's documented no-flow default, under which the sidebar header drops its add button rather than offering a dead one). This package owns the trigger and the adoption: the occupant reports one picked path per open through the hole's owner conversation (`open`/`busy`/`onPicked`/`onCancel`/`onError`), and the owner adopts it through the object layer, selecting the committed Workspace only after its list projection has refreshed; cancellation is silent, and errors land in the retryable folder dialog whose **Choose again** reopens the flow. Adding has exactly one route: the occupant's own create-folder affordance already covers a brand-new directory, so no separate create-by-name dialog exists. A menu only appears where there is something to choose between — with no Workspace listed, the anchor gesture raises the flow directly instead of a one-row popover, and it waits for the list baseline before treating an empty list as final. The runtime Session and Workspace services own materialization. The Workspace row's Delete action opens a confirmation that states the retention boundary, blocks duplicate submission, and keeps failures open; success removes the group while its Sessions remain under Ungrouped. The Session row's Rename action opens the same browser-owned dialog pattern prefilled with the row's display title: no client-side conflict rule exists (the host normalizes and may reject with `title-invalid`, rendered in the dialog alert), and confirming an unchanged title is deliberately allowed — it pins the current automatic title against regeneration. The Session row's Archive action commits without a confirmation dialog (non-destructive: the log and the workspace accounting slot remain) through `ctx.workspaces.archiveSession`; the row disappears from every grouping surface — workspace groups, Ungrouped, content search, and the flat list — when the archive-set echo lands, and failures are console diagnostics that leave the tree unchanged. The Session row's Permanent Delete action requires a second confirmation and refuses a running Session; success removes the durable log plus Workspace/archive references, while content-addressed attachment blobs are retained because another Session may still reference them. While mounted, the browser advertises that permanent-delete integration through `data-dshw-capability-permanent-delete="true"` on the document root and emits `dshw-host-capabilities-change`, allowing optional controls to disable themselves on hosts that do not implement the action. A blank New Session row is a pure placeholder: it renders no row menu and no time label (nothing has happened in it yet), so rename, fork, archive, and permanent delete first apply once the first prompt lands.
+ 
+ Workspace and Session hover cards copy the value their row clips: activating a Workspace card writes its full directory path, while activating a non-blank Session card writes its full display title. A provisional blank New Session card remains read-only because its localized label is a placeholder rather than session content. The card reports the dictionary-driven copied state only after the browser accepts the clipboard write.
+ 
+@@ -31,6 +31,6 @@ None; this package neither assembles nor sends a provider request.
+ ## Known Limitations and Deferred Work
+ 
+ - **No fuzzy content search or event deep links** — the content backend uses literal token/phrase matching, and selecting a result opens the Session rather than the matching event.
+-- **No Session deletion or unarchive control** — sessions can be archived, but archived sessions have no viewing or unarchive surface, and Workspace registration deletion does not delete Sessions.
++- **No unarchive control or attachment garbage collection** — archived sessions have no viewing or unarchive surface; permanent Session deletion intentionally retains shared content-addressed attachment blobs until a reference-aware garbage collector exists.
+ - **Pending user interaction is not aggregated into collapsed groups** — a waiting row inside a collapsed group lights no group-header indicator and becomes visible only after that group is expanded.
+ - **Native folder selection depends on the local Host carrier** — under the `-native` composition, in-process or remote browser deployments cannot open a local operating-system dialog; platform failures are shown in a retryable modal. Remote-capable picking is the `-browse` composition's in-app flow.
+diff --git a/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx b/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
+index d0f6835..8af300b 100644
+--- a/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
++++ b/packages/client/ui-workspace/src/client/WorkspaceBrowser.tsx
+@@ -37,6 +37,11 @@ const SEARCH_DEBOUNCE_MS = 250
+ const SEARCH_QUERY_MAX_CODE_UNITS = 500
+ /** Session rows visible per Workspace before the local overflow control. */
+ const COLLAPSED_SESSION_LIMIT = 5
++/** Shared local preference written by the wallet control panel. */
++const PERMANENT_DELETE_KEY = 'dshw-permanent-delete-v1'
++const PERMANENT_DELETE_EVENT = 'dshw-permanent-delete-change'
++const WALLET_CAPABILITY_EVENT = 'dshw-host-capabilities-change'
++const PERMANENT_DELETE_CAPABILITY_ATTRIBUTE = 'data-dshw-capability-permanent-delete'
+ 
+ /** Keep controlled input and RPC payload inside the session.search wire contract. */
+ function sanitizeSearchQuery(value: string): string {
+@@ -241,6 +246,8 @@ type SessionTreeProps = Pick<
+   onSessionRename: (sessionId: SessionNode['id'], currentTitle: string) => void
+   /** Archive a session (row menu action; the row disappears on the state echo). */
+   onSessionArchive: (sessionId: SessionNode['id']) => void
++  /** Open the permanent session-delete confirmation dialog. */
++  onSessionDelete?: ((sessionId: SessionNode['id'], title: string) => void) | undefined
+   /** Session order behavior: fixed after edits, or additionally promoted by user activity. */
+   orderBy: SessionOrderBy
+ }
+@@ -248,7 +255,7 @@ type SessionTreeProps = Pick<
+ /** The scrolling session tree; unmounting drops the sessions subscription and expand-all state. */
+ function SessionTree({
+   useSessions, startSession, open, forkSession, workspaces, archivedSessionIds,
+-  onRenameRequest, onDeleteRequest, onSessionRename, onSessionArchive,
++  onRenameRequest, onDeleteRequest, onSessionRename, onSessionArchive, onSessionDelete,
+   insertWorkspaceBefore, insertSessionBefore, orderBy,
+   groupExpansion, setGroupExpanded,
+   sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t,
+@@ -516,6 +523,7 @@ function SessionTree({
+                     onRename={onSessionRename}
+                     onFork={forkSession}
+                     onArchive={onSessionArchive}
++                    onDelete={onSessionDelete}
+                     drag={dragProps}
+                     t={t}
+                   />
+@@ -544,7 +552,7 @@ function SessionTree({
+ 
+ /** The flat "In one list" body: every session is one draggable top-level row. */
+ function FlatList({
+-  useSessions, open, forkSession, onSessionRename, onSessionArchive, archivedSessionIds,
++  useSessions, open, forkSession, onSessionRename, onSessionArchive, onSessionDelete, archivedSessionIds,
+   orderBy, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, t,
+ }: Pick<
+   SessionTreeProps,
+@@ -553,6 +561,7 @@ function FlatList({
+   | 'forkSession'
+   | 'onSessionRename'
+   | 'onSessionArchive'
++  | 'onSessionDelete'
+   | 'archivedSessionIds'
+   | 'orderBy'
+   | 'sessionOrderByAccount'
+@@ -632,6 +641,7 @@ function FlatList({
+               onRename={onSessionRename}
+               onFork={forkSession}
+               onArchive={onSessionArchive}
++              onDelete={onSessionDelete}
+               flat
+               drag={{
+                 start: () => {
+@@ -749,6 +759,7 @@ export function WorkspaceBrowser({
+   open,
+   renameSession,
+   forkSession,
++  deleteSession,
+   renameWorkspace,
+   deleteWorkspace,
+   insertWorkspaceBefore,
+@@ -764,6 +775,32 @@ export function WorkspaceBrowser({
+   const workspaces = useWorkspaces(state => state.items)
+   const workspacePhase = useWorkspaces(state => state.phase)
+   const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
++  const [permanentDeleteEnabled, setPermanentDeleteEnabled] = useState(() => {
++    try { return window.localStorage.getItem(PERMANENT_DELETE_KEY) === 'true' } catch { return false }
++  })
++  useEffect(() => {
++    const root = document.documentElement
++    const previous = root.getAttribute(PERMANENT_DELETE_CAPABILITY_ATTRIBUTE)
++    root.setAttribute(PERMANENT_DELETE_CAPABILITY_ATTRIBUTE, 'true')
++    window.dispatchEvent(new Event(WALLET_CAPABILITY_EVENT))
++    return () => {
++      if (previous === null) root.removeAttribute(PERMANENT_DELETE_CAPABILITY_ATTRIBUTE)
++      else root.setAttribute(PERMANENT_DELETE_CAPABILITY_ATTRIBUTE, previous)
++      window.dispatchEvent(new Event(WALLET_CAPABILITY_EVENT))
++    }
++  }, [])
++  useEffect(() => {
++    const refresh = () => {
++      try { setPermanentDeleteEnabled(window.localStorage.getItem(PERMANENT_DELETE_KEY) === 'true') }
++      catch { setPermanentDeleteEnabled(false) }
++    }
++    window.addEventListener(PERMANENT_DELETE_EVENT, refresh)
++    window.addEventListener('storage', refresh)
++    return () => {
++      window.removeEventListener(PERMANENT_DELETE_EVENT, refresh)
++      window.removeEventListener('storage', refresh)
++    }
++  }, [])
+   // Live occupancy of this surface's directory-flow hole (the same source the
+   // flow reads): a composition without a picking affordance can add nothing.
+   const directoryFlowAvailable = useDirectoryFlow(occupied => occupied)
+@@ -937,6 +974,35 @@ export function WorkspaceBrowser({
+     })
+   }
+ 
++  const [sessionDeleteTarget, setSessionDeleteTarget] = useState<{
++    sessionId: SessionNode['id']
++    title: string
++  } | null>(null)
++  const [sessionDeleting, setSessionDeleting] = useState(false)
++  const [sessionDeleteError, setSessionDeleteError] = useState<string | null>(null)
++  const onSessionDelete = (sessionId: SessionNode['id'], title: string) => {
++    if (!permanentDeleteEnabled) return
++    setSessionDeleteTarget({ sessionId, title })
++    setSessionDeleteError(null)
++  }
++  const closeSessionDelete = () => {
++    if (sessionDeleting) return
++    setSessionDeleteTarget(null)
++    setSessionDeleteError(null)
++  }
++  const confirmSessionDelete = () => {
++    if (!permanentDeleteEnabled || sessionDeleting || sessionDeleteTarget === null) return
++    setSessionDeleting(true)
++    setSessionDeleteError(null)
++    deleteSession(sessionDeleteTarget.sessionId).then(() => {
++      setSessionDeleting(false)
++      setSessionDeleteTarget(null)
++    }).catch((reason: unknown) => {
++      setSessionDeleting(false)
++      setSessionDeleteError(reason instanceof Error ? reason.message : String(reason))
++    })
++  }
++
+   // Delete dialog is separate from the row so a successful removal can
+   // unmount that row without tearing down the in-flight confirmation state.
+   const [deleteTarget, setDeleteTarget] = useState<{ workspaceId: WorkspaceId; title: string } | null>(null)
+@@ -1124,6 +1190,7 @@ export function WorkspaceBrowser({
+               <FlatList
+                 useSessions={useSessions} open={open} forkSession={forkSession}
+                 onSessionRename={onSessionRename} onSessionArchive={onSessionArchive}
++                onSessionDelete={permanentDeleteEnabled ? onSessionDelete : undefined}
+                 archivedSessionIds={archivedSessionIds}
+                 orderBy={orderBy}
+                 sessionOrderByAccount={sessionOrderByAccount}
+@@ -1138,6 +1205,7 @@ export function WorkspaceBrowser({
+                 useSessions={useSessions}
+                 onSessionRename={onSessionRename}
+                 onSessionArchive={onSessionArchive}
++                onSessionDelete={permanentDeleteEnabled ? onSessionDelete : undefined}
+                 forkSession={forkSession}
+                 workspaces={workspaces}
+                 groupExpansion={groupExpansion}
+@@ -1232,6 +1300,31 @@ export function WorkspaceBrowser({
+         />
+         {sessionRenameError !== null && <div className={css.renameError} role="alert">{sessionRenameError}</div>}
+       </Modal>
++      <Modal
++        open={sessionDeleteTarget !== null}
++        onClose={closeSessionDelete}
++        closeLabel={t('close')}
++        title={t('delete.session')}
++        {...sessionDeleteTarget === null
++          ? {}
++          : { description: t('delete.session.desc', { name: sessionDeleteTarget.title }) }}
++        footer={(
++          <>
++            <Button variant="outline" disabled={sessionDeleting} onClick={closeSessionDelete}>{t('cancel')}</Button>
++            <Button
++              variant="outline"
++              className={css.deleteAction}
++              disabled={sessionDeleting}
++              onClick={confirmSessionDelete}
++            >
++              {t('delete.session')}
++            </Button>
++          </>
++        )}
++      >
++        {sessionDeleting && <div className={css.deleteStatus} role="status">{t('delete.session.pending')}</div>}
++        {sessionDeleteError !== null && <div className={css.renameError} role="alert">{sessionDeleteError}</div>}
++      </Modal>
+       <Modal
+         open={deleteTarget !== null}
+         onClose={closeDelete}
+diff --git a/packages/client/ui-workspace/src/client/contract/slots.ts b/packages/client/ui-workspace/src/client/contract/slots.ts
+index 8027a36..e06e970 100644
+--- a/packages/client/ui-workspace/src/client/contract/slots.ts
++++ b/packages/client/ui-workspace/src/client/contract/slots.ts
+@@ -112,6 +112,8 @@ export type WorkspaceBrowserInjected = DirectoryPickingInjected & {
+   renameSession: (sessionId: SessionId, title: string) => Promise<void>
+   /** Fork a Session at its last completed turn and open the child. */
+   forkSession: (sessionId: SessionId) => void
++  /** Permanently delete an idle Session after the browser confirms the destructive action. */
++  deleteSession: (sessionId: SessionId) => Promise<void>
+   /** Rename a Host Workspace (rejects on name conflict; resolves on durability). */
+   renameWorkspace: (workspaceId: WorkspaceId, title: string) => Promise<void>
+   /** Delete only a Host Workspace registration; directory and Session logs remain. */
+diff --git a/packages/client/ui-workspace/src/client/index.ts b/packages/client/ui-workspace/src/client/index.ts
+index 6b14243..87d3f46 100644
+--- a/packages/client/ui-workspace/src/client/index.ts
++++ b/packages/client/ui-workspace/src/client/index.ts
+@@ -89,6 +89,7 @@ export function apply(ctx: ClientContext): void {
+           // Fork or child-rename failure keeps the current selection.
+         })
+     },
++    deleteSession: async (sessionId) => { await ctx.sessions.delete(sessionId) },
+     renameWorkspace: async (workspaceId, title) => { await ctx.workspaces.rename(workspaceId, title) },
+     deleteWorkspace: async (workspaceId) => { await ctx.workspaces.delete(workspaceId) },
+     insertWorkspaceBefore: async (workspaceId, beforeWorkspaceId) => {
+diff --git a/packages/client/ui-workspace/src/client/locales.ts b/packages/client/ui-workspace/src/client/locales.ts
+index c08fd93..ad9ab42 100644
+--- a/packages/client/ui-workspace/src/client/locales.ts
++++ b/packages/client/ui-workspace/src/client/locales.ts
+@@ -43,8 +43,12 @@ export const zh = {
+   'delete.workspace': '删除工作区',
+   'delete.desc': '将把“{name}”从工作区列表中移除。文件夹与会话记录会保留，其会话将显示在“未分组”下。',
+   'delete.pending': '正在删除工作区…',
++  'delete.session': '永久删除会话',
++  'delete.session.desc': '将永久删除“{name}”的对话记录，无法恢复。正在运行的会话必须先停止；共享图片会保留，避免影响其他会话。',
++  'delete.session.pending': '正在永久删除会话…',
+   'menu.fork': '分叉会话',
+   'menu.archiveSession': '归档会话',
++  'menu.deleteSession': '永久删除会话',
+   'sessions.count.one': '{n} 个会话',
+   'sessions.count.other': '{n} 个会话',
+   'actions.workspace.aria': '工作区“{name}”的操作',
+@@ -112,8 +116,12 @@ export const en = {
+   'delete.workspace': 'Delete workspace',
+   'delete.desc': 'This removes “{name}” from the workspace list. The folder and session logs will be kept. Its sessions will appear under Ungrouped.',
+   'delete.pending': 'Deleting workspace…',
++  'delete.session': 'Permanently delete session',
++  'delete.session.desc': 'This permanently deletes the conversation log for “{name}” and cannot be undone. Running sessions must be stopped first. Shared images are retained so other sessions are not damaged.',
++  'delete.session.pending': 'Permanently deleting session…',
+   'menu.fork': 'Fork session',
+   'menu.archiveSession': 'Archive session',
++  'menu.deleteSession': 'Permanently delete session',
+   'sessions.count.one': '{n} session',
+   'sessions.count.other': '{n} sessions',
+   'actions.workspace.aria': 'Workspace actions for {name}',
+diff --git a/packages/client/ui-workspace/src/client/rows/Rows.tsx b/packages/client/ui-workspace/src/client/rows/Rows.tsx
+index 481e0f0..96f1463 100644
+--- a/packages/client/ui-workspace/src/client/rows/Rows.tsx
++++ b/packages/client/ui-workspace/src/client/rows/Rows.tsx
+@@ -345,12 +345,13 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
+  * @param props.onRename - open the session rename dialog (id + current title).
+  * @param props.onFork - fork a session at its last completed turn.
+  * @param props.onArchive - archive a session by id.
++ * @param props.onDelete - request permanent deletion confirmation.
+  * @param props.drag - optional draggable-row wiring.
+  * @param props.flat - omit the empty status slot in the hierarchy-free flat list.
+  * @param props.t - the browser root's locale seat.
+  * @returns the session row.
+  */
+-export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork, onArchive, drag, flat = false, t }: {
++export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork, onArchive, onDelete, drag, flat = false, t }: {
+   node: SessionNode
+   currentId: string | undefined
+   now: number
+@@ -361,6 +362,8 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+   onFork: (id: SessionNode['id']) => void
+   /** Archive this session (row menu action; commits without a dialog). */
+   onArchive: (id: SessionNode['id']) => void
++  /** Open the browser-owned permanent deletion dialog. */
++  onDelete?: ((id: SessionNode['id'], title: string) => void) | undefined
+   /** Present only on draggable rows (workspace-group sessions outside search). */
+   drag?: RowDragProps | undefined
+   /** The row is rendered without a parent Workspace header. */
+@@ -382,6 +385,9 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+     { id: 'fork', label: t('menu.fork'), icon: <IconBranchOutline16 /> },
+     // 20-native glyph in the menu's 16px icon slot (Menu.module.css .itemIcon).
+     { id: 'archive', label: t('menu.archiveSession'), icon: <IconArchiveOutline20 size={16} /> },
++    ...(onDelete === undefined
++      ? []
++      : [{ id: 'delete', label: t('menu.deleteSession'), icon: <IconTrashOutline16 /> }]),
+   ]
+   // Figma session cell: pad 8, status slot 16, then a 4px title gap.
+   const ownRow = (
+@@ -444,6 +450,7 @@ export function SessionNodeItem({ node, currentId, now, onOpen, onRename, onFork
+               if (id === 'rename') onRename(node.id, row.title)
+               if (id === 'fork') onFork(node.id)
+               if (id === 'archive') onArchive(node.id)
++              if (id === 'delete') onDelete?.(node.id, title)
+             }}
+             portal
+             closeOnPointerLeave
+diff --git a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
+index fbe42fc..90e2264 100644
+--- a/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
++++ b/packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx
+@@ -73,6 +73,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
+     searchResultLimit: 20,
+     renameSession: vi.fn(async () => {}),
+     forkSession: vi.fn(),
++    deleteSession: vi.fn(async () => {}),
+     renameWorkspace: vi.fn(async () => {}),
+     deleteWorkspace: vi.fn(async () => {}),
+     archiveSession: vi.fn(async () => {}),
+@@ -95,6 +96,18 @@ function rerender(b: ReturnType<typeof mount>, overrides: Partial<WorkspaceBrows
+ }
+ 
+ describe('WorkspaceBrowser', () => {
++  it('advertises permanent-delete support while the compatible host surface is mounted', () => {
++    const changed = vi.fn()
++    window.addEventListener('dshw-host-capabilities-change', changed)
++    const b = mount()
++    expect(document.documentElement.getAttribute('data-dshw-capability-permanent-delete')).toBe('true')
++    expect(changed).toHaveBeenCalledTimes(1)
++    b.view.unmount()
++    expect(document.documentElement.hasAttribute('data-dshw-capability-permanent-delete')).toBe(false)
++    expect(changed).toHaveBeenCalledTimes(2)
++    window.removeEventListener('dshw-host-capabilities-change', changed)
++  })
++
+   it('prunes deleted Workspace view state only after the Workspace baseline is ready', async () => {
+     const pending = {
+       ...workspaceState([]),
+@@ -335,6 +348,74 @@ describe('WorkspaceBrowser', () => {
+     expect(screen.queryByText('gone-s')).toBeNull()
+   })
+ 
++  it('hides permanent deletion by default and exposes it only after the preference event', () => {
++    mount({
++      useSessions: hook(sessionState([summary('guarded-s', 1)])),
++      useWorkspaces: hook(workspaceState([workspace('alpha', ['guarded-s'])])),
++    })
++    fireEvent.click(screen.getByText('alpha'))
++    fireEvent.click(screen.getByRole('button', { name: '会话“guarded-s”的操作' }))
++    expect(screen.queryByRole('menuitem', { name: '永久删除会话' })).toBeNull()
++    fireEvent.keyDown(document, { key: 'Escape' })
++
++    localStorage.setItem('dshw-permanent-delete-v1', 'true')
++    act(() => { window.dispatchEvent(new Event('dshw-permanent-delete-change')) })
++    fireEvent.click(screen.getByRole('button', { name: '会话“guarded-s”的操作' }))
++    expect(screen.getByRole('menuitem', { name: '永久删除会话' })).toBeTruthy()
++  })
++  it('requires confirmation before permanently deleting a session and blocks duplicate submission', async () => {
++    localStorage.setItem('dshw-permanent-delete-v1', 'true')
++    let resolveDelete!: () => void
++    const deleteSession = vi.fn(() => new Promise<void>((resolve) => { resolveDelete = resolve }))
++    mount({
++      useSessions: hook(sessionState([summary('delete-s', 1, { displayTitle: '要删除的会话' })])),
++      useWorkspaces: hook(workspaceState([workspace('alpha', ['delete-s'])])),
++      deleteSession,
++    })
++    fireEvent.click(screen.getByText('alpha'))
++    fireEvent.click(screen.getByRole('button', { name: '会话“要删除的会话”的操作' }))
++    fireEvent.click(screen.getByRole('menuitem', { name: '永久删除会话' }))
++
++    const dialog = screen.getByRole('dialog', { name: '永久删除会话' })
++    expect(dialog.textContent).toContain('无法恢复')
++    expect(dialog.textContent).toContain('正在运行的会话必须先停止')
++    expect(dialog.textContent).toContain('共享图片会保留')
++    expect(deleteSession).not.toHaveBeenCalled()
++
++    const confirm = screen.getByRole<HTMLButtonElement>('button', { name: '永久删除会话' })
++    fireEvent.click(confirm)
++    fireEvent.click(confirm)
++    expect(deleteSession).toHaveBeenCalledOnce()
++    expect(deleteSession).toHaveBeenCalledWith(sid('delete-s'))
++    expect(confirm.disabled).toBe(true)
++    expect(screen.getByRole('status').textContent).toBe('正在永久删除会话…')
++    fireEvent.keyDown(document, { key: 'Escape' })
++    expect(screen.getByRole('dialog', { name: '永久删除会话' })).toBeTruthy()
++
++    await act(async () => { resolveDelete() })
++    expect(screen.queryByRole('dialog', { name: '永久删除会话' })).toBeNull()
++  })
++
++  it('keeps permanent Session deletion open on failure for retry or cancellation', async () => {
++    localStorage.setItem('dshw-permanent-delete-v1', 'true')
++    const deleteSession = vi.fn(async () => { throw new Error('session is still running') })
++    mount({
++      useSessions: hook(sessionState([summary('busy-s', 1)])),
++      useWorkspaces: hook(workspaceState([workspace('alpha', ['busy-s'])])),
++      deleteSession,
++    })
++    fireEvent.click(screen.getByText('alpha'))
++    fireEvent.click(screen.getByRole('button', { name: '会话“busy-s”的操作' }))
++    fireEvent.click(screen.getByRole('menuitem', { name: '永久删除会话' }))
++    fireEvent.click(screen.getByRole('button', { name: '永久删除会话' }))
++    await waitFor(() => {
++      expect(screen.getByRole('alert').textContent).toBe('session is still running')
++    })
++    expect(screen.getByRole('dialog', { name: '永久删除会话' })).toBeTruthy()
++    fireEvent.click(screen.getByRole('button', { name: '取消' }))
++    expect(screen.queryByRole('dialog', { name: '永久删除会话' })).toBeNull()
++  })
++
+   it('logs and keeps the tree when the archive call rejects', async () => {
+     const rejection = new Error('archive exploded')
+     const archiveSession = vi.fn(async () => { throw rejection })
+diff --git a/packages/extensions/tool-cordis/src/api-catalog.ts b/packages/extensions/tool-cordis/src/api-catalog.ts
+index 5a81280..adba0a6 100644
+--- a/packages/extensions/tool-cordis/src/api-catalog.ts
++++ b/packages/extensions/tool-cordis/src/api-catalog.ts
+@@ -1038,6 +1038,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
+         description: 'Durably persist a batch of events. Honors the append-only and contiguous- seq contracts: the first event\'s `seq` MUST equal the stored next-seq (after `load` has durably closed any interrupted turn). Rejects non-JSON- serializable `event.data` with an error naming the offending event type.',
+         parameters: [{ name: 'id', description: 'the session the batch belongs to.' }, { name: 'events', description: 'the contiguous batch to persist, in seq order.' }],
+       },
++      {
++        signature: 'delete(_id: SessionId): Promise<boolean>',
++        description: 'Permanently remove one materialized session artifact. Callers must first release every live Session owner; implementations serialize deletion with queued writes and refuse identities reserved for resume. Shared, content-addressed attachments are deliberately outside this operation.',
++        parameters: [{ name: '_id', description: 'session identity to remove.' }],
++        returns: 'whether a durable artifact existed and was removed.',
++      },
+       {
+         signature: 'async prepare(id: SessionId, signal?: AbortSignal): Promise<SessionPreparation>',
+         description: 'Prepare the exact unpublished Session used by resume. Implementations may reuse object graphs retained by an earlier inspect after confirming their durable revision is still current; disposal releases an unpublished reservation. Revision retries require the durable log to remain unchanged for one read/check round trip; continuous external writers may delay completion.',
+@@ -2145,6 +2151,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
+         parameters: [{ name: 'sessionId', description: 'The session to archive.' }],
+         returns: 'resolution after durability.',
+       },
++      {
++        signature: 'forgetSession(sessionId: SessionId): Promise<void>',
++        description: 'Remove every durable Workspace/archive reference to a session before its log is permanently deleted. This does not delete persistence itself; the caller owns that final irreversible step and may safely retry it.',
++        parameters: [{ name: 'sessionId', description: 'session identity being forgotten.' }],
++      },
+       {
+         signature: 'async resolveByPath(path: string): Promise<Workspace | undefined>',
+         description: 'Resolve by canonical directory path without creating or mutating a workspace. A missing path rejects during `realpath`; an existing unowned directory returns `undefined`.',
+diff --git a/packages/host/apiproxy/src/api-proxy.ts b/packages/host/apiproxy/src/api-proxy.ts
+index bda9936..722a8e1 100644
+--- a/packages/host/apiproxy/src/api-proxy.ts
++++ b/packages/host/apiproxy/src/api-proxy.ts
+@@ -8,7 +8,7 @@ import { mkdir, stat } from 'node:fs/promises'
+ import { dirname } from 'node:path'
+ import type { Context } from '@deepseek-ai/cordis'
+ import { installModelSelection } from '@deepseek-ai/dsh-agent'
+-import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
++import type { Agent, AgentHandle, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
+ import type {} from '@deepseek-ai/dsh-agent-presets/types'
+ import { AttachmentError } from '@deepseek-ai/dsh-attachment'
+ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+@@ -1125,11 +1125,14 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+   const presetSwitches = new Map<SessionId, Promise<unknown>>()
+   /** Client-chosen identity creation/resume, deduplicated across concurrent retries. */
+   const sessionCreations = new Map<SessionId, Promise<Agent>>()
++  /** Top-level Web session capabilities owned by this gateway. */
++  const ownedSessionHandles = new Map<SessionId, AgentHandle>()
+   /** Serializes path ownership and explicit title checks with Workspace mutations. */
+   let workspaceCreationChain = Promise.resolve()
+   const pendingQuestions = new Map<RpcId, PendingQuestion>()
+   const pendingApprovals = new Map<RpcId, PendingApproval>()
+   const muxQueues = new Set<FrameQueue<RpcRequest<MuxFrame>>>()
++  const hostQueues = new Set<FrameQueue<RpcRequest<HostFrame>>>()
+   const imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
+ 
+   /** Serialize image admission with model selection for one agent. */
+@@ -1139,6 +1142,16 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+     return result
+   }
+ 
++  /** Retain the owner capability needed for an explicit permanent delete. */
++  function retainOwnedSession(handle: AgentHandle): Agent {
++    ownedSessionHandles.set(handle.agent.id, handle)
++    return handle.agent
++  }
++
++  ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
++    if (ownedSessionHandles.get(agent.id)?.agent === agent) ownedSessionHandles.delete(agent.id)
++  })
++
+   /**
+    * Install or return the session-local model selection that prompt assembly snapshots.
+    *
+@@ -1268,6 +1281,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+     agentOptions,
+     setup: async ({ meta, events }) =>
+       (await composeAgent(resolveSessionPreset({ header: meta, events }))).setup,
++    retainHandle: (handle) => { retainOwnedSession(handle) },
+   })
+ 
+   /** Send one transient frame to every connected mux consumer. */
+@@ -1276,6 +1290,12 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+     for (const queue of muxQueues) queue.push(envelope)
+   }
+ 
++  /** Send one transient frame to every connected Host-stream consumer. */
++  function broadcastHost(payload: HostFrame): void {
++    const envelope = frame(payload)
++    for (const queue of hostQueues) queue.push(envelope)
++  }
++
+   // Projection change feed → session/projection push frames. The carrier
+   // mints the wire frame (the Service Definition package holds no wire vocabulary); the
+   // child activates only when a projection registry is composed, and the
+@@ -1654,11 +1674,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+           // session's history was produced under that composition, and
+           // rebuilding it differently would replay tool calls the model can no
+           // longer make.
+-          return (await ctx.agents.resume({
++          return retainOwnedSession(await ctx.agents.resume({
+             resumeSessionId: sessionId,
+             agentOptions: agentOptions(),
+             setup: (await composeAgent(storedPreset)).setup,
+-          })).agent
++          }))
+         }
+ 
+         try {
+@@ -1667,7 +1687,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+           throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
+         }
+         const composition = await composeAgent(presetId)
+-        return (await ctx.agents.create({
++        return retainOwnedSession(await ctx.agents.create({
+           sessionId,
+           agentOptions: agentOptions(),
+           meta: {
+@@ -1675,7 +1695,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+             ...composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset },
+           },
+           setup: composition.setup,
+-        })).agent
++        }))
+       })().catch((error: unknown) => {
+         // Another Host entry path may have published the same identity while
+         // this operation crossed an asynchronous persistence/filesystem step.
+@@ -2239,6 +2259,61 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+         return ok(request, { sessionId, ...createdPreset === undefined ? {} : { agentPreset: createdPreset } })
+       },
+ 
++      async delete(request) {
++        const { sessionId } = request.payload
++        try {
++          // Let an already-started create/resume reach one stable ownership
++          // state before deciding whether deletion is safe.
++          await sessionCreations.get(sessionId)
++          const live = ctx.agents.get(sessionId)
++          const stored = (await ctx.sessionPersistence.list()).find(header => header.id === sessionId)
++          const attached = ctx.sessions.get(sessionId)
++          if (live === undefined && attached === undefined && stored === undefined) {
++            return err(request, {
++              code: 'session-not-found',
++              message: `session "${sessionId}" was not found`,
++              details: { sessionId },
++            })
++          }
++          if ((stored?.origin === 'subagent') || (attached !== undefined && hasSubagentOwner(attached, live))) {
++            return err(request, subagentOwnershipError(sessionId))
++          }
++          if (live?.status === 'running') {
++            return err(request, {
++              code: 'agent-busy',
++              message: `session "${sessionId}" is still running; stop it before permanent deletion`,
++              details: { reason: 'session-running' },
++            })
++          }
++          const wasLive = live !== undefined
++          if (live !== undefined) {
++            const handle = ownedSessionHandles.get(sessionId)
++            if (handle === undefined || handle.agent !== live) {
++              return err(request, {
++                code: 'agent-busy',
++                message: `session "${sessionId}" is owned by another runtime and cannot be deleted here`,
++                details: { reason: 'session-owned-elsewhere' },
++              })
++            }
++            await handle.dispose()
++            ownedSessionHandles.delete(sessionId)
++          }
++          // Reversible accounting writes commit before the irreversible log
++          // unlink. If the final delete fails, retry sees an ungrouped session
++          // rather than a dangling Workspace row pointing at missing data.
++          await ctx.workspaceRegistry.forgetSession(sessionId)
++          await ctx.sessionPersistence.delete(sessionId)
++          if (!wasLive) broadcastHost({ type: 'host/session-removed', sessionId })
++          return ok(request, { deleted: true })
++        } catch (error: unknown) {
++          return err(request, {
++            code: 'internal',
++            message: `failed to delete session "${sessionId}": ${String(error)}`,
++            details: {},
++          })
++        }
++      },
++
+       async history(request) {
+         const { sessionId, beforeSeq, maxMessages } = request.payload
+         try {
+@@ -2420,7 +2495,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+         // plane, composing nothing would leave the child with no tools at all.
+         const forkComposition = await composeAgent(resolveSessionPreset(source))
+         try {
+-          await ctx.agents.create({
++          retainOwnedSession(await ctx.agents.create({
+             sessionId: childId,
+             seed: events.slice(0, cut),
+             meta: {
+@@ -2433,7 +2508,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+             },
+             agentOptions: agentOptions(),
+             setup: forkComposition.setup,
+-          })
++          }))
+         } catch (error: unknown) {
+           return err(request, {
+             code: 'internal',
+@@ -3533,6 +3608,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+ 
+       host(_request, signal) {
+         const queue = new FrameQueue<RpcRequest<HostFrame>>()
++        hostQueues.add(queue)
+         const committedWorkspaces = ctx.workspaceRegistry.list()
+         const committedWorkspaceIds = new Set(
+           committedWorkspaces.map(workspace => String(workspace.id)),
+@@ -3632,7 +3708,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+             }),
+           )),
+         ]
+-        return queue.iterate(signal, () => { for (const dispose of disposers) dispose() })
++        return queue.iterate(signal, () => {
++          hostQueues.delete(queue)
++          for (const dispose of disposers) dispose()
++        })
+       },
+     },
+ 
+diff --git a/packages/host/apiproxy/src/api/rpc-map.ts b/packages/host/apiproxy/src/api/rpc-map.ts
+index 80dede1..636a7a9 100644
+--- a/packages/host/apiproxy/src/api/rpc-map.ts
++++ b/packages/host/apiproxy/src/api/rpc-map.ts
+@@ -25,6 +25,7 @@ export interface RpcMethodMap {
+   'session.list': SessionsApi['list']
+   'session.search': SessionsApi['search']
+   'session.create': SessionsApi['create']
++  'session.delete': SessionsApi['delete']
+   'session.history': SessionsApi['history']
+   'session.models': SessionsApi['models']
+   'session.selectModel': SessionsApi['selectModel']
+diff --git a/packages/host/apiproxy/src/api/sessions.schema.ts b/packages/host/apiproxy/src/api/sessions.schema.ts
+index 0fbe06b..1f3fa75 100644
+--- a/packages/host/apiproxy/src/api/sessions.schema.ts
++++ b/packages/host/apiproxy/src/api/sessions.schema.ts
+@@ -115,6 +115,16 @@ export const sessionCreateValueSchema = z.object({
+   agentPreset: z.string().optional(),
+ }) satisfies z.ZodType<Wire<ResponseValue<'session.create'>>>
+ 
++/** session.delete request payload. */
++export const sessionDeleteRequestSchema = z.object({
++  sessionId: sessionIdSchema,
++}) satisfies z.ZodType<Wire<RequestPayload<'session.delete'>>>
++
++/** session.delete response value. */
++export const sessionDeleteValueSchema = z.object({
++  deleted: z.literal(true),
++}) satisfies z.ZodType<Wire<ResponseValue<'session.delete'>>>
++
+ /** session.rename request payload (raw title; host-side normalization decides acceptance). */
+ export const sessionRenameRequestSchema = z.object({
+   sessionId: sessionIdSchema,
+diff --git a/packages/host/apiproxy/src/api/sessions.ts b/packages/host/apiproxy/src/api/sessions.ts
+index 2e7c9b2..389b4cd 100644
+--- a/packages/host/apiproxy/src/api/sessions.ts
++++ b/packages/host/apiproxy/src/api/sessions.ts
+@@ -261,6 +261,14 @@ export interface SessionsApi {
+   create(request: RpcRequest<{ workspaceId?: WorkspaceId; cwd?: string; sessionId?: SessionId; agentPreset?: string }>):
+   Promise<RpcResponse<{ sessionId: SessionId; agentPreset?: string }>>
+ 
++  /**
++   * Permanently deletes an idle ordinary session. The host first disposes a
++   * live owner, removes Workspace/archive references, then deletes the
++   * durable log. Running sessions and session-backed subagents are refused.
++   */
++  delete(request: RpcRequest<{ sessionId: SessionId }>):
++  Promise<RpcResponse<{ deleted: true }>>
++
+   /**
+    * Reads a window of history events; page boundaries align to append-origin message
+    * boundaries: one page = all raw events owned by a whole number of such messages (including
+diff --git a/packages/host/apiproxy/src/fetch/client.ts b/packages/host/apiproxy/src/fetch/client.ts
+index 70e3ece..25413d2 100644
+--- a/packages/host/apiproxy/src/fetch/client.ts
++++ b/packages/host/apiproxy/src/fetch/client.ts
+@@ -21,6 +21,7 @@ import {
+   sessionCancelValueSchema,
+   sessionAttachmentValueSchema,
+   sessionCreateValueSchema,
++  sessionDeleteValueSchema,
+   sessionForkValueSchema,
+   sessionHistoryValueSchema,
+   sessionListValueSchema,
+@@ -89,6 +90,7 @@ export interface IApiClient {
+     list(payload: RequestPayload<'session.list'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.list'>>>
+     search(payload: RequestPayload<'session.search'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.search'>>>
+     create(payload: RequestPayload<'session.create'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.create'>>>
++    delete(payload: RequestPayload<'session.delete'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.delete'>>>
+     history(payload: RequestPayload<'session.history'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.history'>>>
+     models(payload: RequestPayload<'session.models'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.models'>>>
+     selectModel(payload: RequestPayload<'session.selectModel'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.selectModel'>>>
+@@ -173,6 +175,7 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
+   'session.list': sessionListValueSchema,
+   'session.search': sessionSearchValueSchema,
+   'session.create': sessionCreateValueSchema,
++  'session.delete': sessionDeleteValueSchema,
+   'session.history': sessionHistoryValueSchema,
+   'session.models': sessionModelsValueSchema,
+   'session.selectModel': sessionSelectModelValueSchema,
+@@ -413,6 +416,7 @@ export abstract class AbstractApiClient implements IApiClient {
+     list: (payload, signal) => this.callUnary('session.list', payload, signal),
+     search: (payload, signal) => this.callUnary('session.search', payload, signal),
+     create: (payload, signal) => this.callUnary('session.create', payload, signal),
++    delete: (payload, signal) => this.callUnary('session.delete', payload, signal),
+     history: (payload, signal) => this.callUnary('session.history', payload, signal),
+     models: (payload, signal) => this.callUnary('session.models', payload, signal),
+     selectModel: (payload, signal) => this.callUnary('session.selectModel', payload, signal),
+diff --git a/packages/host/apiproxy/src/fetch/handler.ts b/packages/host/apiproxy/src/fetch/handler.ts
+index 697171e..dd1a9b7 100644
+--- a/packages/host/apiproxy/src/fetch/handler.ts
++++ b/packages/host/apiproxy/src/fetch/handler.ts
+@@ -19,6 +19,7 @@ import {
+   sessionCancelRequestSchema,
+   sessionAttachmentRequestSchema,
+   sessionCreateRequestSchema,
++  sessionDeleteRequestSchema,
+   sessionForkRequestSchema,
+   sessionHistoryRequestSchema,
+   sessionListRequestSchema,
+@@ -91,6 +92,7 @@ const UNARY_ROUTES: UnaryRoutes = {
+   'session.list': { schema: sessionListRequestSchema, invoke: (api, r) => api.sessions.list(r) },
+   'session.search': { schema: sessionSearchRequestSchema, invoke: (api, r, signal) => api.sessions.search(r, signal) },
+   'session.create': { schema: sessionCreateRequestSchema, invoke: (api, r) => api.sessions.create(r) },
++  'session.delete': { schema: sessionDeleteRequestSchema, invoke: (api, r) => api.sessions.delete(r) },
+   'session.history': { schema: sessionHistoryRequestSchema, invoke: (api, r) => api.sessions.history(r) },
+   'session.models': { schema: sessionModelsRequestSchema, invoke: (api, r) => api.sessions.models(r) },
+   'session.selectModel': { schema: sessionSelectModelRequestSchema, invoke: (api, r) => api.sessions.selectModel(r) },
+diff --git a/packages/host/apiproxy/src/index.ts b/packages/host/apiproxy/src/index.ts
+index ac6c770..b52f186 100644
+--- a/packages/host/apiproxy/src/index.ts
++++ b/packages/host/apiproxy/src/index.ts
+@@ -68,8 +68,8 @@ export interface Config {
+  */
+ export class ApiProxyService extends Service implements ApiProxy {
+   static inject = [
+-    'agentDefaultModel', 'agents', 'attachments', 'directoryPicker', 'llm', 'sessions', 'subagents', 'sessionQuery',
+-    'tools', 'userQuestions', 'workspaceRegistry',
++    'agentDefaultModel', 'agents', 'attachments', 'directoryPicker', 'llm', 'sessions', 'subagents', 'sessionPersistence',
++    'sessionQuery', 'tools', 'userQuestions', 'workspaceRegistry',
+   ]
+ 
+   static Config: z<Config> = z.object({
+diff --git a/packages/host/apiproxy/tests/api-proxy-workspace.spec.ts b/packages/host/apiproxy/tests/api-proxy-workspace.spec.ts
+index 54bdb01..9d0b3d1 100644
+--- a/packages/host/apiproxy/tests/api-proxy-workspace.spec.ts
++++ b/packages/host/apiproxy/tests/api-proxy-workspace.spec.ts
+@@ -75,21 +75,31 @@ async function harness(
+   const storageDomain = new DomainFacility(ctx, { backend: 'memory', routes: {} })
+   ctx.storage.mount('domain', storageDomain)
+   ctx.provide('storageDomain', storageDomain)
+-  ctx.provide('sessionPersistence', { list: () => Promise.resolve([]) } as never)
++  const deletedSessionIds: SessionId[] = []
++  ctx.provide('sessionPersistence', {
++    list: () => Promise.resolve([]),
++    delete: (sessionId: SessionId) => {
++      deletedSessionIds.push(sessionId)
++      return Promise.resolve(true)
++    },
++  } as never)
+   await ctx.plugin(WorkspaceRegistry)
+ 
+   const factory: AgentFactory = {
+     async createAgent(_ownerCtx, options) {
+-      const session = ctx.sessions.create(
++      const session = ctx.sessions.prepare(
+         options.sessionId,
+         options.meta === undefined ? {} : { meta: options.meta },
+       )
++      const detach = ctx.sessions.enter(session)
++      ctx.sessions.announce(session)
+       const agent = stubAgent(session)
+       const unregister = ctx.agents.register(agent)
+       return {
+         agent,
+         dispose: () => {
+           unregister()
++          detach()
+           return Promise.resolve()
+         },
+       }
+@@ -108,7 +118,7 @@ async function harness(
+     ...extras.openPath === undefined ? {} : { openPath: extras.openPath },
+     ...extras.canOpenPath === undefined ? {} : { canOpenPath: extras.canOpenPath },
+   })
+-  return { api, ctx, storageDomain, root }
++  return { api, ctx, storageDomain, root, deletedSessionIds }
+ }
+ 
+ /** Stage one directory under the harness root for path adoption. */
+@@ -528,6 +538,51 @@ describe('Host Workspace increments', () => {
+     abort.abort()
+   })
+ 
++  it('permanently deletes an idle Web-owned session without an ownership error', async () => {
++    const { api, ctx, root, deletedSessionIds } = await harness()
++    const workspace = expectOk(await api.workspace.create(request({ path: stageDir(root, 'session-delete') }))).workspace
++    const sessionId = SessionId('session-permanent-delete')
++    expectOk(await api.sessions.create(request({ workspaceId: workspace.workspaceId, sessionId })))
++
++    const abort = new AbortController()
++    const stream: AsyncIterator<RpcRequest<HostFrame>> =
++      api.events.host(request({}), abort.signal)[Symbol.asyncIterator]()
++    const removed = nextHostFrame(stream)
++    expectOk(await api.sessions.delete(request({ sessionId })))
++    expect(await removed).toMatchObject({ payload: { type: 'host/session-removed', sessionId } })
++    expect(ctx.agents.get(sessionId)).toBeUndefined()
++    expect(ctx.sessions.get(sessionId)).toBeUndefined()
++    expect(deletedSessionIds).toEqual([sessionId])
++    expect(expectOk(await api.workspace.list(request({}))).items[0]?.sessionIds).toEqual([])
++
++    expect((await api.sessions.delete(request({ sessionId }))).result).toMatchObject({
++      ok: false,
++      error: { code: 'session-not-found', details: { sessionId } },
++    })
++    abort.abort()
++  })
++
++  it('refuses permanent deletion while the session is running', async () => {
++    const { api, ctx, root, deletedSessionIds } = await harness()
++    const workspace = expectOk(await api.workspace.create(request({ path: stageDir(root, 'session-running') }))).workspace
++    const sessionId = SessionId('session-running-delete')
++    expectOk(await api.sessions.create(request({ workspaceId: workspace.workspaceId, sessionId })))
++    const agent = ctx.agents.get(sessionId)
++    if (agent === undefined) throw new Error('created session has no live agent')
++    ;(agent as { status: 'idle' | 'running' }).status = 'running'
++
++    expect((await api.sessions.delete(request({ sessionId }))).result).toMatchObject({
++      ok: false,
++      error: { code: 'agent-busy', details: { reason: 'session-running' } },
++    })
++    expect(ctx.agents.get(sessionId)).toBe(agent)
++    expect(ctx.sessions.get(sessionId)).toBe(agent.session)
++    expect(deletedSessionIds).toEqual([])
++
++    ;(agent as { status: 'idle' | 'running' }).status = 'idle'
++    expectOk(await api.sessions.delete(request({ sessionId })))
++  })
++
+   it('archives a session into the global set, keeps its accounting, and streams the set once', async () => {
+     const { api, root } = await harness()
+     const workspace = expectOk(await api.workspace.create(request({ path: stageDir(root, 'archive-home') }))).workspace
+diff --git a/packages/host/apiproxy/tests/client-handler.spec.ts b/packages/host/apiproxy/tests/client-handler.spec.ts
+index 4130d8f..7bc8a3b 100644
+--- a/packages/host/apiproxy/tests/client-handler.spec.ts
++++ b/packages/host/apiproxy/tests/client-handler.spec.ts
+@@ -38,6 +38,7 @@ function scriptedApi(overrides: {
+       list: r => ok(r, { items: [] }),
+       search: r => ok(r, { items: [], hasMore: false }),
+       create: r => ok(r, { sessionId: sid('s-new') }),
++      delete: r => ok(r, { deleted: true as const }),
+       history: r => ok(r, {
+         events: [],
+         hasMore: false,
+diff --git a/packages/host/apiproxy/tests/fetch-carrier.spec.ts b/packages/host/apiproxy/tests/fetch-carrier.spec.ts
+index 2000f70..a112337 100644
+--- a/packages/host/apiproxy/tests/fetch-carrier.spec.ts
++++ b/packages/host/apiproxy/tests/fetch-carrier.spec.ts
+@@ -44,6 +44,9 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
+       async create(request) {
+         return { rpcId: request.rpcId, result: { ok: true, value: { sessionId: 's-new' as never } } }
+       },
++      async delete(request) {
++        return { rpcId: request.rpcId, result: { ok: true, value: { deleted: true as const } } }
++      },
+       async history(request) {
+         if (request.payload.sessionId === ('with-projections' as never)) {
+           return {
+diff --git a/packages/session/session-persistence-jsonl/src/index.ts b/packages/session/session-persistence-jsonl/src/index.ts
+index 5113746..6ad88cc 100644
+--- a/packages/session/session-persistence-jsonl/src/index.ts
++++ b/packages/session/session-persistence-jsonl/src/index.ts
+@@ -9,7 +9,7 @@
+ import { Context } from '@deepseek-ai/cordis'
+ import z from '@deepseek-ai/schemastery'
+ import { readdirSync } from 'node:fs'
+-import { open, mkdir, readFile, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
++import { open, mkdir, readFile, readdir, realpath, link, rm, rmdir, stat, truncate } from 'node:fs/promises'
+ import { dirname, join, resolve } from 'node:path'
+ import { performance } from 'node:perf_hooks'
+ import { scheduler } from 'node:timers/promises'
+@@ -181,6 +181,10 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
+     return this.coordinator.append(id, events)
+   }
+ 
++  override delete(id: SessionId): Promise<boolean> {
++    return this.coordinator.delete(id)
++  }
++
+   override prepare(id: SessionId, signal?: AbortSignal): Promise<SessionPreparation> {
+     return this.coordinator.prepare(id, signal)
+   }
+@@ -236,6 +240,29 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
+     }
+   }
+ 
++  /**
++   * Remove the exact flat per-session directory without traversing any nested
++   * directory or junction. Unexpected real directories fail before mutation;
++   * regular files and link-shaped entries are unlinked as leaves.
++   */
++  async deleteStored(id: SessionId): Promise<boolean> {
++    await this.ensureRootEncoding()
++    const path = await this.findLog(id)
++    if (path === undefined) return false
++    const dir = dirname(path)
++    const entries = await readdir(dir, { withFileTypes: true })
++    const nested = entries.find(entry => entry.isDirectory() && !entry.isSymbolicLink())
++    if (nested !== undefined) {
++      throw new Error(`refusing to delete session "${id}": unexpected nested directory "${nested.name}"`)
++    }
++    for (const entry of entries) {
++      await rm(join(dir, entry.name), { force: true })
++    }
++    await rmdir(dir)
++    if (process.platform !== 'win32') await this.syncDirPosix(dirname(dir))
++    return true
++  }
++
+   /**
+    * Read a session's stored artifact text verbatim: the durable file bytes
+    * decoded from this backend's physical encoding (complete zstd frames
+diff --git a/packages/session/session-persistence-jsonl/tests/jsonl.spec.ts b/packages/session/session-persistence-jsonl/tests/jsonl.spec.ts
+index 70ae6d1..f426b95 100644
+--- a/packages/session/session-persistence-jsonl/tests/jsonl.spec.ts
++++ b/packages/session/session-persistence-jsonl/tests/jsonl.spec.ts
+@@ -777,6 +777,20 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
+     await walk(root)
+     expect(all.length).toBeGreaterThan(0)
+     expect(all.every(p => p.startsWith(root))).toBe(true)
++    await expect(ctx.sessionPersistence.delete(evil)).resolves.toBe(true)
++    expect((await ctx.sessionPersistence.list()).some(header => header.id === evil)).toBe(false)
++  })
++
++  it('refuses deletion when a session directory contains an unexpected real nested directory', async () => {
++    const m = meta('delete-nested-guard', '/work')
++    await ctx.sessionPersistence.create(m)
++    await ctx.sessionPersistence.append(m.id, oneTurnLog())
++    const path = rawLogPath(root, m.cwd, m.id)
++    await mkdir(join(dirname(path), 'unexpected-child'))
++
++    await expect(ctx.sessionPersistence.delete(m.id)).rejects.toThrow(/unexpected nested directory/)
++    expect((await stat(path)).isFile()).toBe(true)
++    expect((await ctx.sessionPersistence.list()).some(header => header.id === m.id)).toBe(true)
+   })
+ })
+ 
+diff --git a/packages/session/session-persistence-sqlite/src/index.ts b/packages/session/session-persistence-sqlite/src/index.ts
+index 969f1f5..3967167 100644
+--- a/packages/session/session-persistence-sqlite/src/index.ts
++++ b/packages/session/session-persistence-sqlite/src/index.ts
+@@ -182,6 +182,10 @@ export class SqliteSessionPersistence extends SessionPersistence implements Pers
+     return this.coordinator.append(id, events)
+   }
+ 
++  override delete(id: SessionId): Promise<boolean> {
++    return this.coordinator.delete(id)
++  }
++
+   override prepare(id: SessionId, signal?: AbortSignal): Promise<SessionPreparation> {
+     return this.coordinator.prepare(id, signal)
+   }
+@@ -217,6 +221,13 @@ export class SqliteSessionPersistence extends SessionPersistence implements Pers
+     return row === undefined ? undefined : sqliteRevision(this.storeIdentity, row)
+   }
+ 
++  /** Delete one session row; the schema's foreign key cascade removes events. */
++  async deleteStored(id: SessionId): Promise<boolean> {
++    await this.ready
++    const result = this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id)
++    return result.changes > 0
++  }
++
+   /**
+    * Seek-capable suffix read: SQL selects `seq >= fromSeq` directly, so the
+    * read scales with the suffix, not the log. Torn rows past the preserved
+diff --git a/packages/session/session-persistence/src/coordinator.ts b/packages/session/session-persistence/src/coordinator.ts
+index eb5f971..e15aba7 100644
+--- a/packages/session/session-persistence/src/coordinator.ts
++++ b/packages/session/session-persistence/src/coordinator.ts
+@@ -151,6 +151,9 @@ export interface PersistenceBackend<TornMarker = unknown> {
+    */
+   readStoredRevision(id: SessionId, signal?: AbortSignal): Promise<SessionPersistenceRevision | undefined>
+ 
++  /** Permanently remove one backend-owned session artifact or row set. */
++  deleteStored?(id: SessionId): Promise<boolean>
++
+   /**
+    * Optional seek-capable suffix read behind the service's `readFrom`: return
+    * the header plus the stored events with `seq >= fromSeq` without reading
+@@ -679,6 +682,32 @@ export class PersistenceCoordinator<TornMarker = unknown> {
+     return this.serialize(id, () => this.appendCore(id, batch))
+   }
+ 
++  /**
++   * Permanently delete an ownerless session after every prior write/retirement
++   * for its identity has settled.
++   * @param id - session identity to remove.
++   * @returns whether durable storage contained the session.
++   */
++  async delete(id: SessionId): Promise<boolean> {
++    await this.waitForRetirement(id)
++    if (this.ctx.sessions.get(id) !== undefined) {
++      throw new Error(`cannot delete session "${id}" while it is live`)
++    }
++    return this.serialize(id, async () => {
++      if (this.ctx.sessions.get(id) !== undefined) {
++        throw new Error(`cannot delete session "${id}" while it is live`)
++      }
++      if (this.backend.deleteStored === undefined) {
++        throw new Error(`${this.backend.name} does not support session deletion`)
++      }
++      this.preparations.invalidateForDelete(id)
++      const state = this.states.get(id)
++      const deleted = await this.backend.deleteStored(id)
++      this.states.delete(id)
++      return deleted || state?.materialized === true
++    })
++  }
++
+   private async appendCore(id: SessionId, events: readonly SessionEvent[]): Promise<void> {
+     // Every append route converges here: the public service, live write-behind
+     // drains, and HMR seed/suffix adoption. Legacy-shape rejection stays at
+diff --git a/packages/session/session-persistence/src/index.ts b/packages/session/session-persistence/src/index.ts
+index d579dc4..71d1360 100644
+--- a/packages/session/session-persistence/src/index.ts
++++ b/packages/session/session-persistence/src/index.ts
+@@ -142,6 +142,18 @@ export abstract class SessionPersistence extends Service {
+    */
+   abstract append(id: SessionId, events: readonly SessionEvent[]): Promise<void>
+ 
++  /**
++   * Permanently remove one materialized session artifact. Callers must first
++   * release every live Session owner; implementations serialize deletion with
++   * queued writes and refuse identities reserved for resume. Shared,
++   * content-addressed attachments are deliberately outside this operation.
++   * @param _id - session identity to remove.
++   * @returns whether a durable artifact existed and was removed.
++   */
++  delete(_id: SessionId): Promise<boolean> {
++    return Promise.reject(new Error('this session persistence backend does not support deletion'))
++  }
++
+   /**
+    * Prepare the exact unpublished Session used by resume. Implementations may
+    * reuse object graphs retained by an earlier {@link inspect} after confirming
+diff --git a/packages/session/session-persistence/src/preparations.ts b/packages/session/session-persistence/src/preparations.ts
+index 2a685f7..da8d576 100644
+--- a/packages/session/session-persistence/src/preparations.ts
++++ b/packages/session/session-persistence/src/preparations.ts
+@@ -190,6 +190,22 @@ export class SessionPreparations<Source extends PreparedSource, CommitState> {
+     if (entry !== undefined) this.remove(entry)
+   }
+ 
++  /**
++   * Invalidate a cold cached source before permanent deletion. An exclusive
++   * resume reservation is an owner and therefore blocks deletion; a loading
++   * or committing source is serialized by the coordinator and reaches ready
++   * before this method is called.
++   * @param id - session identity being deleted.
++   */
++  invalidateForDelete(id: SessionId): void {
++    const entry = this.entries.get(id)
++    if (entry === undefined) return
++    if (entry.phase !== 'ready') {
++      throw new Error(`cannot delete session "${id}" while its persisted preparation is ${entry.phase}`)
++    }
++    this.remove(entry)
++  }
++
+   /**
+    * Discard an exact stale ready source without disturbing an exclusive owner.
+    * @param id - changed session identity.
+diff --git a/packages/session/session-persistence/tests/contract.ts b/packages/session/session-persistence/tests/contract.ts
+index a672884..1fd847e 100644
+--- a/packages/session/session-persistence/tests/contract.ts
++++ b/packages/session/session-persistence/tests/contract.ts
+@@ -99,6 +99,28 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
+       }
+     })
+ 
++    it('permanently deletes a materialized session and allows the id to be reused', async () => {
++      const { persistence, dispose } = await make()
++      try {
++        const original = meta('delete-me', '/work')
++        await persistence.create(original)
++        await persistence.append(original.id, oneTurnLog())
++        expect((await persistence.list()).some(header => header.id === original.id)).toBe(true)
++
++        expect(await persistence.delete(original.id)).toBe(true)
++        expect((await persistence.list()).some(header => header.id === original.id)).toBe(false)
++        await expect(persistence.inspect(original.id)).rejects.toThrow()
++        expect(await persistence.delete(original.id)).toBe(false)
++
++        const replacement = meta('delete-me', '/replacement')
++        await persistence.create(replacement)
++        await persistence.append(replacement.id, oneTurnLog())
++        expect((await persistence.load(replacement.id)).meta.cwd).toBe('/replacement')
++      } finally {
++        await dispose()
++      }
++    })
++
+     it('rejects a fractional creation timestamp without reserving its session id', async () => {
+       const { persistence, dispose } = await make()
+       try {
+diff --git a/packages/session/session-persistence/tests/persistence.spec.ts b/packages/session/session-persistence/tests/persistence.spec.ts
+index 50ad798..5079984 100644
+--- a/packages/session/session-persistence/tests/persistence.spec.ts
++++ b/packages/session/session-persistence/tests/persistence.spec.ts
+@@ -101,6 +101,10 @@ class MemoryPersistence extends SessionPersistence implements PersistenceBackend
+     return this.coordinator.append(id, events)
+   }
+ 
++  override delete(id: SessionId): Promise<boolean> {
++    return this.coordinator.delete(id)
++  }
++
+   override prepare(id: SessionId, signal?: AbortSignal): ReturnType<PersistenceCoordinator['prepare']> {
+     return this.coordinator.prepare(id, signal)
+   }
+@@ -151,6 +155,10 @@ class MemoryPersistence extends SessionPersistence implements PersistenceBackend
+     }
+   }
+ 
++  async deleteStored(id: SessionId): Promise<boolean> {
++    return this.store.delete(id)
++  }
++
+   async commitRepair(m: SessionHeader, _tornMarker: undefined, closers: readonly SessionEvent[]): Promise<void> {
+     // No torn tails in a Map store, so `_tornMarker` is always undefined; only the
+     // synthetic closers are appended (the same DELETE+INSERT a DB backend does,
+@@ -211,6 +219,10 @@ class ControlledBackend implements PersistenceBackend<never> {
+     return entry === undefined ? undefined : memoryRevision(entry)
+   }
+ 
++  async deleteStored(id: SessionId): Promise<boolean> {
++    return this.store.delete(id)
++  }
++
+   async appendBatch(m: SessionHeader, events: readonly SessionEvent[], _isMaterialized: boolean): Promise<void> {
+     const attempt = ++this.appendAttempts
+     await this.beforeAppend?.(attempt)
+@@ -489,6 +501,36 @@ describe('PersistenceCoordinator session preparations', () => {
+     })).toThrow(/writeBatchMaxDelayMs must be an integer between/)
+   })
+ 
++  it('refuses a live or resume-reserved identity and deletes it after every owner releases it', async () => {
++    const ctx = new Context()
++    await ctx.plugin(SessionStore)
++    const backend = new ControlledBackend()
++    const id = SessionId('delete-ownership')
++    const header = meta(id)
++    backend.store.set(id, { meta: header, events: oneTurnLog() })
++    let coordinator!: PersistenceCoordinator<never>
++    const fiber = await ctx.plugin(Object.assign((inner: Context) => {
++      coordinator = new PersistenceCoordinator(inner, backend)
++    }, { inject: ['sessions'] }))
++
++    try {
++      const live = ctx.sessions.prepare(id, { meta: header })
++      const detach = ctx.sessions.enter(live)
++      await expect(coordinator.delete(id)).rejects.toThrow(/while it is live/)
++      detach()
++
++      const preparation = await coordinator.prepare(id)
++      await expect(coordinator.delete(id)).rejects.toThrow(/persisted preparation is reserved/)
++      preparation[Symbol.dispose]()
++
++      await expect(coordinator.delete(id)).resolves.toBe(true)
++      expect(backend.store.has(id)).toBe(false)
++    } finally {
++      await fiber.dispose()
++      await ctx.fiber.dispose()
++    }
++  })
++
+   it('retries invalidated prepare and load reservations', async () => {
+     const ctx = new Context()
+     await ctx.plugin(SessionStore)
+diff --git a/packages/test-support/client-runtime/src/sessions.ts b/packages/test-support/client-runtime/src/sessions.ts
+index c014d6f..bc5fe83 100644
+--- a/packages/test-support/client-runtime/src/sessions.ts
++++ b/packages/test-support/client-runtime/src/sessions.ts
+@@ -185,7 +185,7 @@ export class TestSessions implements ISessions {
+   /** Calls observed on the service-level face, newest last. */
+   readonly calls: {
+     method: 'open' | 'openSubagent' | 'setSubagentCatalogOpen' | 'refreshSubagents'
+-      | 'clear' | 'search' | 'fork'
++      | 'clear' | 'search' | 'fork' | 'delete'
+     args: unknown[]
+   }[] = []
+ 
+@@ -413,6 +413,11 @@ export class TestSessions implements ISessions {
+     })
+   }
+ 
++  async delete(id: SessionId): Promise<void> {
++    this.calls.push({ method: 'delete', args: [id] })
++    await this.remove(id)
++  }
++
+   /** Open an existing fixture through its catalog address. */
+   openSubagent(address: SubagentAddress): void {
+     this.calls.push({ method: 'openSubagent', args: [address] })
+diff --git a/packages/workspace/workspace/src/index.ts b/packages/workspace/workspace/src/index.ts
+index 87edb28..d28d4f9 100644
+--- a/packages/workspace/workspace/src/index.ts
++++ b/packages/workspace/workspace/src/index.ts
+@@ -134,6 +134,7 @@ export class WorkspaceRegistry extends Service {
+     }
+ 
+     await this.indexLiveSessions()
++    await this.pruneOrphanedArchivedSessions()
+     this.validateStoredState(this.requireState())
+     this.rebuildEntities()
+     this.reportFilteredCandidates()
+@@ -254,6 +255,28 @@ export class WorkspaceRegistry extends Service {
+     })
+   }
+ 
++  /**
++   * Remove every durable Workspace/archive reference to a session before its
++   * log is permanently deleted. This does not delete persistence itself; the
++   * caller owns that final irreversible step and may safely retry it.
++   * @param sessionId - session identity being forgotten.
++   */
++  forgetSession(sessionId: SessionId): Promise<void> {
++    return this.enqueueOperation(async () => {
++      for (const workspace of this.list()) await workspace.detachSession(sessionId)
++      const state = this.requireState()
++      if (state.archivedSessionIds.includes(sessionId)) {
++        await this.setState({
++          ...state,
++          archivedSessionIds: state.archivedSessionIds.filter(id => id !== sessionId),
++        })
++      }
++      this.headers.delete(sessionId)
++      this.sessionPaths.delete(sessionId)
++      this.invalidSessionPaths.delete(sessionId)
++    })
++  }
++
+   /**
+    * Whether a session is live, header-indexed, or present in a fresh
+    * persistence listing. Only a definite miss returns false — a failing
+@@ -595,6 +618,15 @@ export class WorkspaceRegistry extends Service {
+     await this.indexHeaders(sessions.list().map(session => session.header))
+   }
+ 
++  /** Remove archive ids whose durable and live sessions no longer exist. */
++  private async pruneOrphanedArchivedSessions(): Promise<void> {
++    const state = this.requireState()
++    const archivedSessionIds = state.archivedSessionIds.filter(id => this.headers.has(id))
++    if (archivedSessionIds.length === state.archivedSessionIds.length
++      && archivedSessionIds.every((id, index) => id === state.archivedSessionIds[index])) return
++    await this.setState({ ...state, archivedSessionIds })
++  }
++
+   private reportFilteredCandidates(): void {
+     for (const entity of this.entities.values()) {
+       const record = this.requireTable().get(entity.id) as WorkspaceRecord
+diff --git a/packages/workspace/workspace/tests/workspace.spec.ts b/packages/workspace/workspace/tests/workspace.spec.ts
+index 22900c7..0b26d5a 100644
+--- a/packages/workspace/workspace/tests/workspace.spec.ts
++++ b/packages/workspace/workspace/tests/workspace.spec.ts
+@@ -921,6 +921,18 @@ describe('registry-global session archive', () => {
+     expect(storedState(result.pool).archivedSessionIds).toEqual([])
+   })
+ 
++  it('prunes orphaned archived ids at startup but retains persisted archived sessions', async () => {
++    const dir = await makeDir('archive-prune-orphans')
++    const id = WorkspaceId('00000000-0000-4000-8000-00000000000b')
++    const pool = storedPool(
++      [[id, record(dir, ['kept', 'ghost'])]],
++      { initialized: true, workspaceIds: [id], archivedSessionIds: [SessionId('kept'), SessionId('ghost')] },
++    )
++    const result = await harness({ pool, sessions: [header('kept', dir, 100)] })
++
++    expect(result.registry.archivedSessionIds).toEqual(['kept'])
++    expect(storedState(result.pool).archivedSessionIds).toEqual(['kept'])
++  })
+   it('restores the archive set across restarts and defaults it for pre-field media', async () => {
+     const dir = await makeDir('archive-restart')
+     const pool = new MemoryMediaPool()
