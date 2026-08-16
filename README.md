@@ -47,6 +47,8 @@ The project is designed around quick reading and in-context action rather than a
 
 The npm package handles monitoring and interface behavior; optional host powers are enabled only when DSH actually provides them. That capability-based boundary keeps unsupported actions visibly unavailable and gives browsers or desktop wrappers a small, reviewable adaptation surface. Future providers and controls can therefore be added without changing the established `deepseek-harness-wallet` package identity or silently expanding what the plugin is trusted to do.
 
+> **Want permanent session deletion?** It cannot be enabled by configuring the plugin alone. Give the [integration guide](./integrations/dsh-session-delete/README.md) and [Agent adaptation prompt](./integrations/dsh-session-delete/AGENT_PROMPT.md) to an Agent with access to the buildable DSH source. The control-panel switch becomes available only after the host implementation is built, tested, and advertises the capability.
+
 Details: [compatibility](#browser-desktop-and-os-compatibility) · [data and trust](#data--trust) · [pricing](#pricing-timeline)
 
 ## Install
