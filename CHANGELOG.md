@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here.
 
+## 0.1.3 - 2026-08-16
+
+- Fixed the recharge shortcut so its first click reliably opens the anti-phishing confirmation, including when the detail panel is closed (contributed in PR #2 by QZYWQ).
+- Fixed the detail panel opening below the viewport; it now uses viewport-aware fixed positioning and flips above the chip when needed.
+- Session cost is now accumulated at the price active when each usage event arrives, so historical spend no longer changes at peak/off-peak or policy boundaries. Existing stores migrate once to schema v2 and keep the migrated estimate.
+- Added currency-aware balance formatting and stopped applying the CNY low-balance threshold to non-CNY accounts.
+- Reworked floating drag with pointer events for mouse and touch, fixed click-without-drag crashes, and clamp positions using the actual dot/window dimensions.
+- Replaced nested clickable markup with native buttons, added dialog semantics, focus handling, Escape support, and keyboard focus styles.
+- Moved the interactive chip to the Harness `conversation.input.left` slot, deduplicated concurrent balance refreshes, and flush pending persisted changes during plugin shutdown.
+- Expanded regression coverage and CI to run tests and package verification on Linux and Windows with Node 22 and 24.
+
 ## 0.1.2 - 2026-08-15
 
 - Fixed the client bundle loader id to match the package name (`deepseek-harness-wallet`); 0.1.1 still registered the old `dsh-wallet` id, which aborted the whole plugin boot ("loaded without registering") after the rename. Regression test added.

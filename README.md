@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version 0.1.2" src="https://img.shields.io/badge/version-0.1.2-5965d8">
+  <img alt="Version 0.1.3" src="https://img.shields.io/badge/version-0.1.3-5965d8">
   <img alt="DeepSeek Harness rc.6" src="https://img.shields.io/badge/dsh-0.1.0--rc.6-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -24,12 +24,12 @@ A resident one-line chip beside the composer: official DeepSeek (balance, sessio
 ## What it shows
 
 ```
-余额 5.89 · 本场 0.72 · 官 18.8M | 三方 800K · ↗充
+余额 ¥5.89 · 本场 ¥0.72 · 官 18.8M | 三方 800K · ↗充
 ```
 
-- **Official DeepSeek** — live balance (60s global refresh with fast boot retries), current-session cost (official pricing timeline, including the 2026-08-17 peak/off-peak rollout), and token breakdown.
+- **Official DeepSeek** — live balance (60s global refresh with fast boot retries), current-session cost locked to the price active for each usage event (including the 2026-08-17 peak/off-peak rollout), and token breakdown.
 - **Third-party total** — current-session tokens (input / cache read / output). No balance guessing, no cost math, zero configuration.
-- **Click the chip** to open the detail panel: per-currency balance breakdown, cost and token splits, a freely editable low-balance threshold in CNY (two decimals, persisted globally; the chip compares the CNY balance, never a mixed-currency sum), manual refresh, and a jump to the official recharge page (first click shows the domain for confirmation — anti-phishing).
+- **Click the chip** to open the detail panel: correctly formatted per-currency balances, cost and token splits, a freely editable low-balance threshold in CNY (two decimals, persisted globally; alerts only compare a CNY balance and never mix currencies), manual refresh, and a jump to the official recharge page (first click shows the domain for confirmation — anti-phishing).
 - **Floating window mode** — from the detail panel, detach the wallet into a floating window you can drag anywhere (position remembered across reloads), or minimize it to a small dot; the dot turns red below the threshold.
 - **Low-balance alert** — below the threshold the chip turns red with a breathing animation and fires one desktop notification; it resets automatically once the balance recovers.
 - **Theme-native UI** — built entirely on `--dsw-alias-*` theme variables, so light and dark themes both render correctly; the panel closes when you click outside and flips open-direction near screen edges.
@@ -75,7 +75,7 @@ dsh plugin --profile web remove deepseek-harness-wallet
 
 | Item | Behavior |
 | --- | --- |
-| Token accounting | Listens to the `llm/stream` event and buckets per provider (`deepseek-official` vs. everything else) and per session; multiple sessions never mix accounts. |
+| Token accounting | Listens to the `llm/stream` event and buckets per provider (`deepseek-official` vs. everything else) and per session; each usage event also locks its contemporaneous official price, so multiple sessions and pricing windows never mix. |
 | Balance | The `DEEPSEEK_API_KEY` from the credentials seam never leaves this machine except as the `Authorization` header of the official `/user/balance` request. |
 | Session log | The plugin writes no events; its data lives in `$DSH_HOME/storages/wallet.json`. |
 | Model surface | No tools registered, no prompt injection, zero token cost. |
@@ -91,7 +91,7 @@ CNY per 1M tokens, curated from official announcements (cache writes are not bil
   - v4-flash (off-peak / peak): cache read 0.05 / 0.10, input 1.5 / 3, output 4.5 / 9
   - v4-pro (off-peak / peak): cache read 0.15 / 0.30, input 4.5 / 9, output 13.5 / 27
 
-deepseek-chat and deepseek-reasoner keep their flat rates. Costs are estimates; the API-returned balance is authoritative.
+deepseek-chat and deepseek-reasoner keep their flat rates. Each usage event is priced when it arrives; upgrading from 0.1.2 migrates legacy counters once using the then-current rate. Costs are estimates; the API-returned balance is authoritative.
 
 ## Roadmap
 
