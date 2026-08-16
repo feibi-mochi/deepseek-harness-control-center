@@ -1,28 +1,18 @@
 # DeepSeek Harness Control Center
 
-### DeepSeek Harness monitoring, alerts, recharge, and session control center · DeepSeek Harness 监控、提醒、充值与会话控制中心
+[![npm version](https://img.shields.io/npm/v/deepseek-harness-wallet?label=npm&color=5965d8)](https://www.npmjs.com/package/deepseek-harness-wallet)
+[![GitHub release](https://img.shields.io/github/v/release/feibi-mochi/deepseek-harness-control-center?label=release&color=5965d8)](https://github.com/feibi-mochi/deepseek-harness-control-center/releases)
+[![CI](https://github.com/feibi-mochi/deepseek-harness-control-center/actions/workflows/validate.yml/badge.svg)](https://github.com/feibi-mochi/deepseek-harness-control-center/actions/workflows/validate.yml)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.0--rc.6-4aa3ff)](https://github.com/deepseek-ai/DeepSeek-Harness)
+[![License: MIT](https://img.shields.io/badge/license-MIT-3b7a57)](./LICENSE)
 
-[English](./README.md) · [简体中文](https://github.com/feibi-mochi/deepseek-harness-control-center/blob/main/docs/i18n/README.zh-CN.md)
+**DeepSeek Harness monitoring, alerts, recharge, and session control center.**
 
-**Version:** 0.1.4 · **DeepSeek Harness:** 0.1.0-rc.6 · **License:** MIT
+`Balance ¥5.89 · Session ¥0.72 · Official 18.8M | Third-party 800K · ↗ Recharge`
 
-**A local-first monitoring and control companion for DeepSeek Harness Web.**
+[English](./README.md) · [简体中文](https://github.com/feibi-mochi/deepseek-harness-control-center/blob/main/docs/i18n/README.zh-CN.md) · [Install](#install) · [Compatibility](#browser-desktop-and-os-compatibility) · [Changelog](./CHANGELOG.md)
 
-DeepSeek Harness can keep several conversations and model providers active at once, but the information needed to manage them is normally scattered: the official account balance is on one page, token usage is buried in stream events, a long-running conversation may finish in a background tab, and session cleanup is separate again. DeepSeek Harness Control Center brings those signals and controls into one small surface beside the composer while retaining `deepseek-harness-wallet` as its installation and compatibility identifier. It is designed to answer three everyday questions without interrupting the conversation: **How much official balance remains? What has this conversation used? Does anything need my attention?**
-
-The resident chip combines the live DeepSeek balance, the open conversation's estimated official spend, official token usage, third-party token totals, and the official recharge shortcut. Accounting is isolated twice—by conversation and by provider—so one conversation cannot borrow another conversation's counters, and third-party traffic cannot become DeepSeek spend. Official cost is accumulated when each usage event arrives using the price active at that moment; later peak/off-peak changes therefore do not rewrite historical estimates. The detail panel expands this summary into per-currency balance rows, token splits, session spend, refresh controls, and a configurable CNY low-balance threshold.
-
-Monitoring is paired with deliberate actions. A low balance changes the wallet's visual state and emits one alert until the balance recovers. The recharge shortcut always targets DeepSeek's fixed official top-up URL, and the first use shows the destination before leaving Harness. Completion reminders cover a different kind of waiting: they can remain until manually dismissed or close after a selected delay, combine simultaneous completions into a queue, coordinate across tabs, and open the relevant conversation when clicked. If a system notification cannot be shown, the same event falls back to an in-page notice instead of disappearing silently.
-
-The interface is meant to live with the user's workspace rather than occupy it. The chip may remain in the composer, move freely, preview and snap to supported page edges or regions, switch between compact horizontal and vertical arrangements, scale from the control panel, or minimize directly to a movable dot. If the composer becomes too narrow for the full home chip, it keeps a clickable balance/token value instead of overflowing underneath the model selector. Official and third-party data can be shown independently while preventing an empty all-hidden state. The details panel itself is draggable and remembers its last position, and saved positions are fitted back into the viewport when the window changes.
-
-Session controls keep two very different operations separate. **Clear current-session wallet data** removes only this plugin's balance-derived spend and token counters for the open conversation; it does not delete the conversation. **Permanent session deletion** is an optional host integration, not a deletion engine supplied by this npm package. It appears only when the current DSH host advertises a real deletion path, remains opt-in, and still requires confirmation; unsupported hosts keep the setting disabled. This boundary prevents a decorative switch from promising an operation the surrounding application cannot perform.
-
-The trust model is intentionally narrow. The plugin registers no model tools, injects no prompt text, and adds no model-token overhead. Its host-side accounting is kept in the local DSH storage, while layout and reminder preferences use browser-compatible local storage. The existing DSH credential is used only for the official balance request, and recharge navigation is fixed to the official DeepSeek domain. The plugin does not collect payment details, estimate third-party money values without a price source, or merge balances across currencies.
-
-Compatibility is based on capabilities rather than operating-system names. A normal DSH Web environment uses standards-based browser behavior; restricted Electron, Tauri, or other desktop shells can provide a small adapter for notifications, storage, and external links without changing accounting or UI logic. Optional features degrade visibly when a capability is absent. This keeps the project useful as a broader Harness monitoring and session-control center while leaving room for future provider adapters, history views, and other management features without changing the established npm package identity.
-
-> If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
+> A local-first companion that keeps account status, per-conversation usage, completion reminders, official recharge, flexible layout, and host-gated session controls beside the DSH composer.
 
 ## What it does
 
@@ -40,6 +30,24 @@ Compatibility is based on capabilities rather than operating-system names. A nor
 - **Low-balance alert** — below the threshold the chip turns red with a breathing animation and fires one desktop notification; it resets automatically once the balance recovers.
 - **Theme-native UI** — built entirely on `--dsw-alias-*` theme variables, so light and dark themes both render correctly; the panel closes when you click outside and flips open-direction near screen edges.
 - **Clear current-session wallet data** — one button clears only the open conversation's token/cost records; it does not delete the conversation, and every other conversation is untouched.
+
+## Why this exists
+
+DeepSeek Harness can keep several conversations and model providers active at once, but the information needed to manage them is normally scattered: the official account balance is on one page, token usage is buried in stream events, a long-running conversation may finish in a background tab, and session cleanup is separate again. DeepSeek Harness Control Center brings those signals and controls into one small surface beside the composer while retaining `deepseek-harness-wallet` as its installation and compatibility identifier. It is designed to answer three everyday questions without interrupting the conversation: **How much official balance remains? What has this conversation used? Does anything need my attention?**
+
+The resident chip combines the live DeepSeek balance, the open conversation's estimated official spend, official token usage, third-party token totals, and the official recharge shortcut. Accounting is isolated twice—by conversation and by provider—so one conversation cannot borrow another conversation's counters, and third-party traffic cannot become DeepSeek spend. Official cost is accumulated when each usage event arrives using the price active at that moment; later peak/off-peak changes therefore do not rewrite historical estimates. The detail panel expands this summary into per-currency balance rows, token splits, session spend, refresh controls, and a configurable CNY low-balance threshold.
+
+Monitoring is paired with deliberate actions. A low balance changes the wallet's visual state and emits one alert until the balance recovers. The recharge shortcut always targets DeepSeek's fixed official top-up URL, and the first use shows the destination before leaving Harness. Completion reminders cover a different kind of waiting: they can remain until manually dismissed or close after a selected delay, combine simultaneous completions into a queue, coordinate across tabs, and open the relevant conversation when clicked. If a system notification cannot be shown, the same event falls back to an in-page notice instead of disappearing silently.
+
+The interface is meant to live with the user's workspace rather than occupy it. The chip may remain in the composer, move freely, preview and snap to supported page edges or regions, switch between compact horizontal and vertical arrangements, scale from the control panel, or minimize directly to a movable dot. If the composer becomes too narrow for the full home chip, it keeps a clickable balance/token value instead of overflowing underneath the model selector. Official and third-party data can be shown independently while preventing an empty all-hidden state. The details panel itself is draggable and remembers its last position, and saved positions are fitted back into the viewport when the window changes.
+
+Session controls keep two very different operations separate. **Clear current-session wallet data** removes only this plugin's balance-derived spend and token counters for the open conversation; it does not delete the conversation. **Permanent session deletion** is an optional host integration, not a deletion engine supplied by this npm package. It appears only when the current DSH host advertises a real deletion path, remains opt-in, and still requires confirmation; unsupported hosts keep the setting disabled. This boundary prevents a decorative switch from promising an operation the surrounding application cannot perform.
+
+The trust model is intentionally narrow. The plugin registers no model tools, injects no prompt text, and adds no model-token overhead. Its host-side accounting is kept in the local DSH storage, while layout and reminder preferences use browser-compatible local storage. The existing DSH credential is used only for the official balance request, and recharge navigation is fixed to the official DeepSeek domain. The plugin does not collect payment details, estimate third-party money values without a price source, or merge balances across currencies.
+
+Compatibility is based on capabilities rather than operating-system names. A normal DSH Web environment uses standards-based browser behavior; restricted Electron, Tauri, or other desktop shells can provide a small adapter for notifications, storage, and external links without changing accounting or UI logic. Optional features degrade visibly when a capability is absent. This keeps the project useful as a broader Harness monitoring and session-control center while leaving room for future provider adapters, history views, and other management features without changing the established npm package identity.
+
+> If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
 
 ## Install
 
