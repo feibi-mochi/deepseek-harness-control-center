@@ -293,7 +293,7 @@ test('documentation distinguishes host-gated deletion from clearing wallet data'
   assert.match(chinese, /不会删除对话/)
 })
 
-test('README heroes stay compact while detailed product narratives remain below features', () => {
+test('README heroes stay compact while product overviews remain structured below features', () => {
   const englishReadme = readProjectFile('README.md')
   const chineseReadme = readProjectFile('docs/i18n/README.zh-CN.md')
   const englishHero = englishReadme.split('## What it does', 1)[0]
@@ -304,14 +304,14 @@ test('README heroes stay compact while detailed product narratives remain below 
   assert.match(chineseHero, /考虑点一个 ⭐ Star/, 'Chinese Star prompt must remain in the hero')
   const english = englishReadme.split('## Project overview')[1].split('## Install')[0]
   const chinese = chineseReadme.split('## 项目介绍')[1].split('## 安装')[0]
-  assert.ok(english.length >= 4000, 'English introduction must remain detailed')
-  assert.ok(chinese.length >= 1700, 'Chinese introduction must remain detailed')
+  assert.ok(english.length >= 1500 && english.length < 3000, 'English overview must remain substantial but scannable')
+  assert.ok(chinese.length >= 500 && chinese.length < 1500, 'Chinese overview must remain substantial but scannable')
   assert.doesNotMatch(english, /consider leaving a ⭐ Star/, 'English Star prompt must not trail the overview')
   assert.doesNotMatch(chinese, /考虑点一个 ⭐ Star/, 'Chinese Star prompt must not trail the overview')
-  for (const term of ['balance', 'accounting', 'recharge', 'reminders', 'move freely', 'Permanent session deletion', 'local storage', 'falls back']) {
+  for (const term of ['One place for the signals that matter', 'Present when needed, quiet when not', 'Extensible without hiding the boundaries']) {
     assert.match(english, new RegExp(term, 'i'), `English introduction is missing ${term}`)
   }
-  for (const term of ['余额', '统计', '充值', '提醒', '自由移动', '永久删除会话', '本地存储', '退回']) {
+  for (const term of ['把重要信息收回对话旁边', '需要时出现，平时不打扰', '可以扩展，但不隐藏能力边界']) {
     assert.match(chinese, new RegExp(term), `Chinese introduction is missing ${term}`)
   }
 })
