@@ -1,0 +1,82 @@
+name: Publish npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing non-draft, non-prerelease GitHub Release tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish trusted npm release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release tag
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then TAG="$INPUT_TAG"; else TAG="$RELEASE_TAG"; fi
+          test -n "$TAG"
+          RELEASE_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")"
+          test "$(jq -r .draft <<<"$RELEASE_JSON")" = "false"
+          test "$(jq -r .prerelease <<<"$RELEASE_JSON")" = "false"
+          test "$(jq -r .tag_name <<<"$RELEASE_JSON")" = "$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install npm with trusted-publishing support
+        run: npm install --global npm@11.5.1
+      - name: Verify tag matches package version
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          test "$TAG" = "v$VERSION"
+      - name: Check syntax
+        run: npm run check:syntax
+      - name: Run regression tests
+        run: npm test
+      - name: Verify exact publishable package
+        run: npm run check:pack
+      - name: Check whether this version is already published
+        id: existing
+        run: |
+          set -euo pipefail
+          NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          set +e
+          OUTPUT="$(npm view "${NAME}@${VERSION}" version 2>&1)"
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif grep -q 'E404' <<<"$OUTPUT"; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n' "$OUTPUT" >&2
+            exit "$STATUS"
+          fi
+      - name: Publish through npm OIDC
+        if: steps.existing.outputs.skip != 'true'
+        run: npm publish --access public --provenance
+      - name: Report idempotent skip
+        if: steps.existing.outputs.skip == 'true'
+        run: echo 'The exact package version already exists; no duplicate publish was attempted.'
