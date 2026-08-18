@@ -613,7 +613,7 @@ test('wallet chip scale is stepped, bounded, and drives a live slider', () => {
   assert.ok(slider)
   assert.equal(slider.props.type, 'range')
   assert.equal(slider.props.min, '75')
-  assert.equal(slider.props.max, '120', 'the default home dock caps the slider at 120%')
+  assert.equal(slider.props.max, '105', 'the default home dock caps the slider at 105%')
   slider.props.onChange({ target: { value: '85' } })
   tree = renderer.render(Component, { sessionId: 'session-1' })
   chip = findElement(tree, (element) => element.props && element.props['aria-label'] === 'DeepSeek 钱包')
@@ -629,7 +629,7 @@ test('home chip keeps a clickable compact value when the composer slot shrinks',
   assert.match(source, /\.dshw_anchorHome\.dshw_compact \.dshw_recharge\{display:none\}/)
   assert.match(source, /\.dshw_anchorHome\.dshw_fit \.dshw_chipMain>span:not\(\.dshw_homePrimary\)\{display:none\}/, 'a tight row must degrade to balance plus recharge before collapsing to the bare value')
   assert.match(source, /chipNode\.clientWidth >= chipNode\.scrollWidth - 1 \? 'fit' : 'compact'/, 'home sizing must let the composer row decide between full, fit, and compact modes')
-  assert.match(source, /dock === 'home' \? 1\.2 : 1\.25/, 'the scale cap must tighten to 120% while the chip is docked in the composer')
+  assert.match(source, /dock === 'home' \? 1\.2 : 1\.25/, 'the scale cap must tighten to 105% while the chip is docked in the composer')
   assert.match(source, /max: String\(scaleMaxPercent\)/, 'the slider max must follow the dock-specific scale cap')
   assert.match(source, /chipScaleRef\.current > 1\.2\) saveChipScale\(1\.2\)/, 'a stored 125% must clamp down when the chip returns home')
 
