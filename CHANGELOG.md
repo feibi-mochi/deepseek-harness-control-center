@@ -1,6 +1,13 @@
 # Changelog
 
-All notable changes to this project are documented here.
+All notable changes to this project are documented in this file.
+
+## 0.1.5 - 2026-08-18
+
+- 修复输入框内的余额标签被固定压缩成 44px 极简显示的问题，现在按实际可用空间在完整 / 紧凑 / 极简三档间自动切换。 / Fixed the composer chip always collapsing to its 44px compact value; it now switches between full, fit, and compact layouts by measured space.
+- 修复缩放比例不等于 100% 时被误判为空间不足的问题。 / Fixed compact mode being mis-triggered whenever the scale was not 100%.
+- 修复芯片拖到输入框旁悬浮时被其他面板遮挡的问题。 / Fixed docked chips being covered by neighbouring host panels.
+- 输入框内缩放上限调整为 120%，悬浮 / 侧边停靠时仍可到 125%。 / The scale slider is capped at 120% in the composer row; floating and side docks keep the full 75–125% range.
 
 ## 0.1.4 - 2026-08-17
 
