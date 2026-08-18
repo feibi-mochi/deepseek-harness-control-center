@@ -151,6 +151,27 @@ function migratedOfficialBucket(value, atMs) {
   return { models, cost, priced }
 }
 
+// Provider-route aliasing: wrapper plugins (e.g. vision proxies) sit in front
+// of the official API under their own provider id, so the bucket check must be
+// a configured set rather than one hard-coded name.
+export function normalizeProviderList(value) {
+  if (!Array.isArray(value)) return []
+  const seen = new Set()
+  for (const item of value) {
+    if (typeof item !== 'string' || item === '' || item.length > 100) continue
+    if (item === '__proto__' || item === 'prototype' || item === 'constructor') continue
+    if (item === OFFICIAL_PROVIDER) continue
+    seen.add(item)
+    if (seen.size >= 20) break
+  }
+  return [...seen]
+}
+
+export function isOfficialProvider(provider, extraProviders) {
+  if (provider === OFFICIAL_PROVIDER) return true
+  return Array.isArray(extraProviders) && extraProviders.includes(provider)
+}
+
 export function normalizeStoreData(value, atMs = Date.now()) {
   const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
   const rawSessions = source.sessions !== null && typeof source.sessions === 'object' && !Array.isArray(source.sessions)
@@ -165,7 +186,13 @@ export function normalizeStoreData(value, atMs = Date.now()) {
       third: { models: normalizeModels(rawSession.third && rawSession.third.models) },
     }
   }
-  const normalized = { version: STORE_VERSION, threshold: normalizeThreshold(source.threshold), sessions }
+  const normalized = {
+    version: STORE_VERSION,
+    threshold: normalizeThreshold(source.threshold),
+    sessions,
+    officialProviders: normalizeProviderList(source.officialProviders),
+    knownProviders: normalizeProviderList(source.knownProviders),
+  }
   return { store: normalized, migrated: JSON.stringify(source) !== JSON.stringify(normalized) }
 }
 
@@ -554,6 +581,14 @@ function snapshotView(sessionId, threshold) {
       activeName: active !== null ? active.name : null,
       count: accounts.accounts.length,
     },
+    // Wrapper provider routes (vision proxies etc.) the user has marked as
+    // official, plus the ones observed so far that are not official yet —
+    // the settings page turns these into checkboxes. Issue #21.
+    providers: {
+      builtinOfficial: OFFICIAL_PROVIDER,
+      official: [...store.officialProviders],
+      known: store.knownProviders.filter((p) => p !== OFFICIAL_PROVIDER && !store.officialProviders.includes(p)),
+    },
   }
 }
 
@@ -703,6 +738,24 @@ export function apply(ctx, config) {
       },
     })
     // -- multi-account routes -------------------------------------------------
+    // Configure which wrapper provider routes (vision proxies and the like)
+    // bill into the official bucket. Issue #21.
+    const disposeProviders = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/wallet/official-providers',
+      handler: async (req, res) => {
+        if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        const body = await readBody(req)
+        if (body === null || !Array.isArray(body.providers)) return json(res, 400, { ok: false, error: 'providers array is required' })
+        store.officialProviders = normalizeProviderList(body.providers)
+        scheduleSave(ctx.logger)
+        return json(res, 200, {
+          ok: true,
+          official: [...store.officialProviders],
+          known: store.knownProviders.filter((p) => p !== OFFICIAL_PROVIDER && !store.officialProviders.includes(p)),
+        })
+      },
+    })
     const disposeAccounts = ctx.webServer.register({
       kind: 'exact',
       path: '/api/wallet/accounts',
@@ -766,6 +819,7 @@ export function apply(ctx, config) {
       disposeRefresh()
       disposeClear()
       disposeAccounts()
+      disposeProviders()
       disposeActivate()
       disposeRemove()
       clearInterval(balanceTimer)
