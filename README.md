@@ -16,14 +16,6 @@
 
 > If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
 
-## Multi-account
-
-- Open the wallet panel → **账户管理** to add accounts (name + API key), switch the active one, or remove them.
-- The first account added becomes the active account automatically and is synced into the credentials seam.
-- Switching prompts a confirmation because it changes **LLM billing** for subsequent requests: the switch writes the account key into the credentials seam (`credentials.set('DEEPSEEK_API_KEY', ...)`), and since the llm-deepseek provider route resolves that reference per request, the very next LLM call is billed with the new account — no restart needed.
-- Account keys are stored plaintext in `$DSH_HOME/storages/accounts.json`; the UI only ever shows masked keys. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
-- If `DEEPSEEK_API_KEY` is supplied by the launching environment, switching is refused with a clear error (the credentials provider rejects shadowed writes) — unset it in your shell to enable switching.
-
 ## What it does
 
 ```
@@ -40,6 +32,14 @@
 - **Low-balance alert** — below the threshold the chip turns red with a breathing animation and fires one desktop notification; it resets automatically once the balance recovers.
 - **Theme-native UI** — built entirely on `--dsw-alias-*` theme variables, so light and dark themes both render correctly; the panel closes when you click outside and flips open-direction near screen edges.
 - **Clear current-session wallet data** — one button clears only the open conversation's token/cost records; it does not delete the conversation, and every other conversation is untouched.
+## Multi-account
+
+- Open the wallet panel → **账户管理** to add accounts (name + API key), switch the active one, or remove them.
+- The first account added becomes the active account automatically and is synced into the credentials seam.
+- Switching prompts a confirmation because it changes **LLM billing** for subsequent requests: the switch writes the account key into the credentials seam (`credentials.set('DEEPSEEK_API_KEY', ...)`), and since the llm-deepseek provider route resolves that reference per request, the very next LLM call is billed with the new account — no restart needed.
+- Account keys are stored plaintext in `$DSH_HOME/storages/accounts.json`; the UI only ever shows masked keys. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
+- If `DEEPSEEK_API_KEY` is supplied by the launching environment, switching is refused with a clear error (the credentials provider rejects shadowed writes) — unset it in your shell to enable switching.
+
 
 ## Project overview
 

@@ -22,6 +22,9 @@ import {
   normalizeStoreData,
   normalizeThreshold,
   sumBalances,
+  normalizeAccountsData,
+  maskKey,
+  validateApiKey,
 } from '../index.js'
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
