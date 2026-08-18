@@ -1483,3 +1483,15 @@ test('host settings section renders the restyled card without crashing', () => {
   assert.ok(balanceCard, 'the settings section must render the balance card')
   assert.ok(setCard, 'the settings section must render the grouped settings card')
 })
+
+test('session cost follows the active account currency with a marked estimate', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /function sessionCostText/, 'a currency-aware session cost helper must exist')
+  assert.match(source, /USD_ESTIMATE_PER_CNY/, 'USD display must be an explicit estimate, never a silent FX conversion')
+  assert.doesNotMatch(source, /sessionCostText\([^)]*\), 'CNY'\)/, 'no call site may hard-code CNY after the currency follows the account')
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const Section = exports.__testing.WalletSettingsSection
+  const tree = renderer.render(Section, { close: () => {} })
+  assert.ok(tree, 'the settings section still renders')
+})
