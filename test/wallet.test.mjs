@@ -1454,3 +1454,13 @@ test('activateAccount: missing accounts and refused credential writes fail safel
   // The stored activeId is left untouched on failure.
   assert.equal(mod.activeAccount().id, added.account.id)
 })
+test('chip exposes a settings gear that opens the control panel', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const { Component } = walletComponent(exports)
+  const tree = renderer.render(Component, { sessionId: 'session-1' })
+  const gear = findElement(tree, (element) => element.type === 'button' && element.props['aria-label'] === '打开钱包设置')
+  assert.ok(gear, 'the chip must expose a settings entry button beside the recharge control')
+  assert.equal(typeof gear.props.onClick, 'function')
+  assert.equal(gear.props['aria-haspopup'], 'dialog')
+})
