@@ -8,21 +8,14 @@
 
 **DeepSeek Harness 监控、提醒、充值与会话控制中心。**
 
-<<<<<<< HEAD
-<p align="center">
-  <img alt="版本 0.2.0" src="https://img.shields.io/badge/version-0.2.0-5965d8">
-  <img alt="DeepSeek Harness rc.6" src="https://img.shields.io/badge/dsh-0.1.0--rc.6-4aa3ff">
-  <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
-</p>
-=======
 `余额 ¥5.89 · 本场 ¥0.72 · 官 18.8M | 三方 800K · ↗ 充值`
->>>>>>> origin/main
 
 [English](../../README.md) · [简体中文](./README.zh-CN.md) · [安装](#安装) · [兼容性](#浏览器桌面端与系统兼容) · [更新日志](../../CHANGELOG.md)
 
 > 一个以本地数据为主、常驻输入框旁的 DSH 助手：集中查看账户状态与本会话用量，接收完成提醒，前往官方充值，并按宿主能力提供会话控制。
 
-<<<<<<< HEAD
+> 如果 DeepSeek Harness Control Center 帮到了你，请考虑点一个 ⭐ Star，谢谢！
+
 ## 多账户
 
 - 打开钱包面板 → **账户管理**，可添加账户（名称 + API Key）、切换当前账户或删除账户。
@@ -30,13 +23,6 @@
 - 切换会弹确认框，因为它会改变**后续 LLM 请求的计费**：切换把该账户 key 写入凭证库（`credentials.set('DEEPSEEK_API_KEY', ...)`），llm-deepseek 路由按请求解析该引用，因此**下一次 LLM 调用即用新账户计费，无需重启**。
 - 账户 key 明文存储于 `$DSH_HOME/storages/accounts.json`，界面只显示掩码。余额查询优先使用当前账户 key，无激活账户时回退到系统凭证库。
 - 若启动环境已提供 `DEEPSEEK_API_KEY`，切换会被明确拒绝（凭证提供方拒绝遮蔽写入）——在 shell 中取消该环境变量即可启用切换。
-
-<p align="center">
-  如果 deepseek-harness-wallet 帮到了你，请考虑点一个 ⭐ Star，谢谢！
-</p>
-=======
-> 如果 DeepSeek Harness Control Center 帮到了你，请考虑点一个 ⭐ Star，谢谢！
->>>>>>> origin/main
 
 ## 能做什么
 

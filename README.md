@@ -8,21 +8,14 @@
 
 **DeepSeek Harness monitoring, alerts, recharge, and session control center.**
 
-<<<<<<< HEAD
-<p align="center">
-  <img alt="Version 0.2.0" src="https://img.shields.io/badge/version-0.2.0-5965d8">
-  <img alt="DeepSeek Harness rc.6" src="https://img.shields.io/badge/dsh-0.1.0--rc.6-4aa3ff">
-  <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
-</p>
-=======
 `Balance ¥5.89 · Session ¥0.72 · Official 18.8M | Third-party 800K · ↗ Recharge`
->>>>>>> origin/main
 
 [English](./README.md) · [简体中文](https://github.com/feibi-mochi/deepseek-harness-control-center/blob/main/docs/i18n/README.zh-CN.md) · [Install](#install) · [Compatibility](#browser-desktop-and-os-compatibility) · [Changelog](./CHANGELOG.md)
 
 > A local-first companion that keeps account status, per-conversation usage, completion reminders, official recharge, flexible layout, and host-gated session controls beside the DSH composer.
 
-<<<<<<< HEAD
+> If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
+
 ## Multi-account
 
 - Open the wallet panel → **账户管理** to add accounts (name + API key), switch the active one, or remove them.
@@ -30,13 +23,6 @@
 - Switching prompts a confirmation because it changes **LLM billing** for subsequent requests: the switch writes the account key into the credentials seam (`credentials.set('DEEPSEEK_API_KEY', ...)`), and since the llm-deepseek provider route resolves that reference per request, the very next LLM call is billed with the new account — no restart needed.
 - Account keys are stored plaintext in `$DSH_HOME/storages/accounts.json`; the UI only ever shows masked keys. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
 - If `DEEPSEEK_API_KEY` is supplied by the launching environment, switching is refused with a clear error (the credentials provider rejects shadowed writes) — unset it in your shell to enable switching.
-
-<p align="center">
-  If deepseek-harness-wallet helps you, please consider leaving a ⭐ Star. Thank you!
-</p>
-=======
-> If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
->>>>>>> origin/main
 
 ## What it does
 
