@@ -1464,3 +1464,17 @@ test('chip exposes a settings gear that opens the control panel', () => {
   assert.equal(typeof gear.props.onClick, 'function')
   assert.equal(gear.props['aria-haspopup'], 'dialog')
 })
+
+test('plugin registers a host settings-panel section below the visual tools', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /ctx\.slots\.inject\('settings\.section'/, 'the wallet must register a settings-panel section through the host slots API')
+  assert.match(source, /id: 'wallet',\s*\r?\n\s*order: 40/, 'the section must use order 40, right below the vision-toolkit section at 30')
+  assert.match(source, /WalletSettingsSection/, 'the settings section component must exist')
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const { Component } = walletComponent(exports)
+  const tree = renderer.render(Component, { sessionId: 'session-1' })
+  // WalletChip 仍正常渲染（回归）
+  const chip = findElement(tree, (element) => element.props && element.props['aria-label'] === 'DeepSeek 钱包')
+  assert.ok(chip, 'the composer chip must keep rendering')
+})
