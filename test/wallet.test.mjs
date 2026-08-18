@@ -214,7 +214,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.1.4')
+  assert.equal(pkg.version, '0.1.5')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -609,7 +609,7 @@ test('wallet chip scale is stepped, bounded, and drives a live slider', () => {
   assert.ok(slider)
   assert.equal(slider.props.type, 'range')
   assert.equal(slider.props.min, '75')
-  assert.equal(slider.props.max, '125')
+  assert.equal(slider.props.max, '120', 'the default home dock caps the slider at 120%')
   slider.props.onChange({ target: { value: '85' } })
   tree = renderer.render(Component, { sessionId: 'session-1' })
   chip = findElement(tree, (element) => element.props && element.props['aria-label'] === 'DeepSeek 钱包')
@@ -621,8 +621,13 @@ test('home chip keeps a clickable compact value when the composer slot shrinks',
   const source = readProjectFile('lib/client.js')
   assert.match(source, /\.dshw_anchorHome\{[^}]*overflow:hidden/)
   assert.match(source, /\.dshw_anchorHome\{[^}]*min-width:44px/)
-  assert.match(source, /@container dshw-home \(max-width:90px\)/)
-  assert.match(source, /\.dshw_anchorHome \.dshw_recharge\{display:none\}/)
+  assert.ok(!/@container dshw-home/.test(source), 'container queries must not size the home anchor: inline-size containment collapses it to the 44px minimum even in roomy composers')
+  assert.match(source, /\.dshw_anchorHome\.dshw_compact \.dshw_recharge\{display:none\}/)
+  assert.match(source, /\.dshw_anchorHome\.dshw_fit \.dshw_chipMain>span:not\(\.dshw_homePrimary\)\{display:none\}/, 'a tight row must degrade to balance plus recharge before collapsing to the bare value')
+  assert.match(source, /chipNode\.clientWidth >= chipNode\.scrollWidth - 1 \? 'fit' : 'compact'/, 'home sizing must let the composer row decide between full, fit, and compact modes')
+  assert.match(source, /dock === 'home' \? 1\.2 : 1\.25/, 'the scale cap must tighten to 120% while the chip is docked in the composer')
+  assert.match(source, /max: String\(scaleMaxPercent\)/, 'the slider max must follow the dock-specific scale cap')
+  assert.match(source, /chipScaleRef\.current > 1\.2\) saveChipScale\(1\.2\)/, 'a stored 125% must clamp down when the chip returns home')
 
   const renderer = createHookRenderer()
   const { exports } = loadClientBundle(renderer.React)
@@ -634,6 +639,14 @@ test('home chip keeps a clickable compact value when the composer slot shrinks',
   assert.ok(primary, 'the compact state must preserve the official balance as its primary value')
   assert.equal(primary.props.children[0].props.className, 'dshw_homePrimaryLabel')
   assert.equal(primary.props.children[1].props.className, 'dshw_homePrimaryValue')
+})
+
+test('docked chip escapes the composer stacking context', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /\.dshw_chipLift\{z-index:80!important\}/, 'the lift class must outrank host panels that cover docked chips')
+  assert.match(source, /isStackingContext\(/, 'trapping ancestor stacking contexts must be detected')
+  assert.match(source, /outermost\.classList\.add\('dshw_chipLift'\)/, 'the outermost trapping ancestor must be lifted while docked')
+  assert.match(source, /outermost\.classList\.remove\('dshw_chipLift'\)/, 'the lift must be removed when the effect cleans up')
 })
 
 test('official and third-party displays can be selected independently', () => {
