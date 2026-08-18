@@ -1468,3 +1468,18 @@ test('plugin registers a host settings-panel section below the visual tools', ()
   const chip = findElement(tree, (element) => element.props && element.props['aria-label'] === 'DeepSeek 钱包')
   assert.ok(chip, 'the composer chip must keep rendering')
 })
+
+test('host settings section renders the restyled card without crashing', () => {
+  const renderer = createHookRenderer()
+  const { exports, window } = loadClientBundle(renderer.React)
+  // fetch 在测试环境不可达: 组件必须走错误分支也不崩
+  const Section = exports.__testing.WalletSettingsSection
+  assert.equal(typeof Section, 'function', 'WalletSettingsSection must be exported for render coverage')
+  let tree = renderer.render(Section, { close: function () {} })
+  // 异步 fetch 完成后再渲染一帧(错误/空数据分支)
+  tree = renderer.render(Section, { close: function () {} })
+  const balanceCard = findElement(tree, (element) => element.props && String(element.props.className || '').includes('dshw_balanceCard'))
+  const setCard = findElement(tree, (element) => element.props && String(element.props.className || '').includes('dshw_setCard'))
+  assert.ok(balanceCard, 'the settings section must render the balance card')
+  assert.ok(setCard, 'the settings section must render the grouped settings card')
+})
