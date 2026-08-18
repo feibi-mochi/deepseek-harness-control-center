@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         node: [22.19.0, 24]
     steps:
       - uses: actions/checkout@v4
@@ -29,5 +29,54 @@ jobs:
         run: node --check lib/client.js
       - name: Run regression tests
         run: npm test
-      - name: Verify publishable package
-        run: npm pack --dry-run
+      - name: Verify exact publishable package
+        run: npm run check:pack
+      - name: Check out the pinned DSH reference baseline
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/DeepSeek-Harness
+          ref: 47f943859bef60e4160492346772ded9b24f765a
+          path: .dsh-reference
+      - name: Run read-only DSH compatibility preflight
+        run: node integrations/dsh-session-delete/preflight.mjs .dsh-reference
+      - name: Verify the reference patch applies cleanly
+        run: git -C .dsh-reference apply --check ../integrations/dsh-session-delete/reference/dsh-47f9438-session-delete.patch
+
+  dsh-reference-tests:
+    name: DSH reference deletion tests · Ubuntu · Node 24
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check out the pinned DSH reference baseline
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/DeepSeek-Harness
+          ref: 47f943859bef60e4160492346772ded9b24f765a
+          path: .dsh-reference
+      - name: Apply the pinned reference patch
+        run: git -C .dsh-reference apply ../integrations/dsh-session-delete/reference/dsh-47f9438-session-delete.patch
+      - name: Install the pinned DSH package manager
+        run: npm install --global pnpm@11.7.0
+      - name: Install locked DSH dependencies
+        working-directory: .dsh-reference
+        run: pnpm install --frozen-lockfile
+      - name: Type-check the adapted DSH source
+        working-directory: .dsh-reference
+        run: pnpm run typecheck
+      - name: Run focused deletion-chain tests with temporary fixtures
+        working-directory: .dsh-reference
+        run: >-
+          pnpm exec vitest run
+          packages/session/session-persistence/tests/persistence.spec.ts
+          packages/session/session-persistence-jsonl/tests/jsonl.spec.ts
+          packages/session/session-persistence-sqlite/tests/sqlite.spec.ts
+          packages/workspace/workspace/tests/workspace.spec.ts
+          packages/host/apiproxy/tests/api-proxy-workspace.spec.ts
+          packages/host/apiproxy/tests/client-handler.spec.ts
+          packages/host/apiproxy/tests/fetch-carrier.spec.ts
+          packages/client/runtime/tests/manager.client.spec.ts
+          packages/client/runtime/tests/sessions-service.client.spec.ts
+          packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx

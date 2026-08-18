@@ -1,7 +1,12 @@
 {
   "name": "deepseek-harness-wallet",
+<<<<<<< HEAD
   "description": "Balance monitoring, per-session spend tracking, token statistics, low-balance alerts, official recharge shortcut, and multi-account management with hot account switching (view balance AND switch the LLM billing key) for DeepSeek Harness.",
   "version": "0.2.0",
+=======
+  "description": "Local-first account monitoring, usage accounting, official recharge, completion reminders, flexible layout, and host-gated session controls for DeepSeek Harness.",
+  "version": "0.1.5",
+>>>>>>> origin/main
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -10,12 +15,16 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "CHANGELOG.md",
     "index.js",
     "lib/client.js",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "integrations/dsh-session-delete/**"
   ],
   "license": "MIT",
   "scripts": {
+    "check:syntax": "node --check index.js && node --check lib/client.js",
+    "check:pack": "node scripts/verify-pack.mjs",
     "test": "node --test"
   },
   "keywords": [
@@ -33,11 +42,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/feibi-mochi/deepseek-harness-wallet.git"
+    "url": "git+https://github.com/feibi-mochi/deepseek-harness-control-center.git"
   },
-  "homepage": "https://github.com/feibi-mochi/deepseek-harness-wallet#readme",
+  "homepage": "https://github.com/feibi-mochi/deepseek-harness-control-center#readme",
   "bugs": {
-    "url": "https://github.com/feibi-mochi/deepseek-harness-wallet/issues"
+    "url": "https://github.com/feibi-mochi/deepseek-harness-control-center/issues"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

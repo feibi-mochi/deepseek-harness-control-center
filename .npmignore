@@ -1,8 +1,11 @@
-node_modules/
 .agents/
 .specify/
 specs/
 pnpm-lock.yaml
+test/
+docs/
+.github/
+node_modules/
 coverage/
 *.tmp
 *.log
@@ -10,6 +13,3 @@ coverage/
 .env.*
 .vscode/
 .idea/
-.DS_Store
-Thumbs.db
-desktop.ini

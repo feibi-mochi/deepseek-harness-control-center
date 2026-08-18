@@ -692,7 +692,10 @@ export function apply(ctx, config) {
         if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
         const body = await readBody(req)
         const sid = body && body.session
-        if (sid && store.sessions[sid]) {
+        if (typeof sid !== 'string' || !/^session-[A-Za-z0-9-]+$/.test(sid)) {
+          return json(res, 400, { ok: false, error: 'session must be a valid session id' })
+        }
+        if (store.sessions[sid]) {
           delete store.sessions[sid]
           scheduleSave(ctx.logger)
         }

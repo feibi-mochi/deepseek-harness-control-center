@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "integration": "dsh-session-delete",
+  "packageVersion": "0.1.4",
+  "upstream": {
+    "repository": "https://github.com/deepseek-ai/DeepSeek-Harness",
+    "commit": "47f943859bef60e4160492346772ded9b24f765a",
+    "rootPackageVersion": "0.1.0-rc.5",
+    "license": "MIT"
+  },
+  "referencePatch": {
+    "path": "reference/dsh-47f9438-session-delete.patch",
+    "sha256": "b43b806c0856cf07889d5659f0d5ff3fd3b460696fb3a1a12a29e3b3c7b411a6"
+  },
+  "supportedHostShapes": [
+    "buildable DeepSeek Harness Web source trees",
+    "buildable Electron or Tauri wrappers that retain the DSH Web plugin and workspace UI seams"
+  ],
+  "unsupportedHostShapes": [
+    "closed-source desktop applications",
+    "wrappers whose matching source cannot be rebuilt",
+    "hosts that expose only the wallet plugin but no session persistence or workspace UI source"
+  ],
+  "platformRequirements": {
+    "windows": "Git, the Node and package-manager versions required by the target DSH checkout, and a disposable test profile",
+    "macos": "Git, the Node and package-manager versions required by the target DSH checkout, and a disposable test profile",
+    "linux": "Git, the Node and package-manager versions required by the target DSH checkout, and a disposable test profile"
+  }
+}
