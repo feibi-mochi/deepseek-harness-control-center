@@ -24,6 +24,13 @@ All notable changes to this project are documented in this file.
 - Expanded the zero-dependency test suite with release metadata, documentation-resource, HTTP route-boundary, layout, reminder, desktop fallback, and capability-gating checks; added exact npm archive verification for the 0.1.4 release candidate.
 - Expanded validation to Windows, Ubuntu, and macOS on Node 22.19 and 24, added cross-platform reference-patch checks and focused DSH deletion-chain tests, and added npm OIDC trusted publishing for formal GitHub Releases.
 
+## 0.2.0 - 2026-08-16
+
+- Added multi-account management: add / list / remove multiple DeepSeek accounts from the wallet panel's 账户管理 section; keys are stored in `$DSH_HOME/storages/accounts.json` and the UI only shows masked keys.
+- Added hot account switching: activating an account writes its key into the credentials seam (`credentials.set('DEEPSEEK_API_KEY', ...)`), so the next LLM request is billed with the new account without a restart. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
+- The first account added becomes the active account automatically; switching is refused with a clear error when `DEEPSEEK_API_KEY` is supplied by the launching environment (shadowed writes are rejected by the credentials provider).
+- Added `GET/POST /api/wallet/accounts`, `POST /api/wallet/accounts/activate`, and `POST /api/wallet/accounts/remove` routes, plus unit tests for the account store helpers.
+
 ## 0.1.3 - 2026-08-16
 
 - Fixed the recharge shortcut so its first click reliably opens the anti-phishing confirmation, including when the detail panel is closed (contributed in PR #2 by QZYWQ).

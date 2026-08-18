@@ -32,6 +32,14 @@
 - **Low-balance alert** — below the threshold the chip turns red with a breathing animation and fires one desktop notification; it resets automatically once the balance recovers.
 - **Theme-native UI** — built entirely on `--dsw-alias-*` theme variables, so light and dark themes both render correctly; the panel closes when you click outside and flips open-direction near screen edges.
 - **Clear current-session wallet data** — one button clears only the open conversation's token/cost records; it does not delete the conversation, and every other conversation is untouched.
+## Multi-account
+
+- Open the wallet panel → **账户管理** to add accounts (name + API key), switch the active one, or remove them.
+- The first account added becomes the active account automatically and is synced into the credentials seam.
+- Switching prompts a confirmation because it changes **LLM billing** for subsequent requests: the switch writes the account key into the credentials seam (`credentials.set('DEEPSEEK_API_KEY', ...)`), and since the llm-deepseek provider route resolves that reference per request, the very next LLM call is billed with the new account — no restart needed.
+- Account keys are stored plaintext in `$DSH_HOME/storages/accounts.json`; the UI only ever shows masked keys. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
+- If `DEEPSEEK_API_KEY` is supplied by the launching environment, switching is refused with a clear error (the credentials provider rejects shadowed writes) — unset it in your shell to enable switching.
+
 
 ## Project overview
 
@@ -118,7 +126,8 @@ For buildable DSH hosts, the npm package and repository include a versioned [Age
 | Item | Behavior |
 | --- | --- |
 | Token accounting | Listens to the `llm/stream` event and buckets per provider (`deepseek-official` vs. everything else) and per session; each usage event also locks its contemporaneous official price, so multiple sessions and pricing windows never mix. |
-| Balance | The `DEEPSEEK_API_KEY` from the credentials seam never leaves this machine except as the `Authorization` header of the official `/user/balance` request. |
+| Balance | The key from the credentials seam (or the active account's key) never leaves this machine except as the `Authorization` header of the official `/user/balance` request. |
+| Accounts | Keys live in `$DSH_HOME/storages/accounts.json` (plaintext, matching the harness's own credential storage); the UI only ever shows masked keys, and switching writes the chosen key into the credentials seam for LLM billing. |
 | Session log | The plugin writes no events; its data lives in `$DSH_HOME/storages/wallet.json`. |
 | Local settings | Layout, scale, visibility, reminder, and panel settings stay in browser-compatible local storage. |
 | Permanent deletion | Opt-in and host-gated. The wallet never advertises the action unless the host implements the matching session deletion path. |
