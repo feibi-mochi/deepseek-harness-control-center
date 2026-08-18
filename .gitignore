@@ -13,3 +13,6 @@ coverage/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# local spec-kit tooling for personal ZCode use
+.zcode/
