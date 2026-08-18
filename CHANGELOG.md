@@ -5,7 +5,6 @@ All notable changes to this project are documented in this file.
 ## 0.2.0 - 2026-08-18
 
 - 新增多账户管理与热切换：面板内“账户管理”可添加多个账户（名称 + API Key），切换后无需重启，下一次 LLM 调用即按新账户计费；key 界面掩码显示，余额查询跟随当前账户（contributed in PR #4 by mxchen-xyz）。 / Added multi-account management with hot switching: manage accounts in the panel, and the very next LLM call is billed with the newly activated key — no restart needed; keys stay masked in the UI and balance follows the active account.
-- 余额标签右侧新增 ⚙ 设置入口，点击直接打开钱包设置面板。 / Added a ⚙ settings entry beside the balance chip that opens the control panel directly.
 - 宿主设置面板（视觉工具下方）新增「钱包」设置页：余额、阈值、显示内容、芯片比例、完成提醒与账户管理，与标签面板实时同步。 / Added a 钱包 (Wallet) page to the host settings panel below Visual tools: balance, threshold, visibility, chip scale, completion reminders, and account management, kept in sync with the chip panel.
 
 ## 0.1.5 - 2026-08-18
