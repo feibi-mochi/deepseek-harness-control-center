@@ -201,7 +201,7 @@ function loadStore() {
     return normalizeStoreData(JSON.parse(readFileSync(STORE_PATH, 'utf8')))
   } catch {
     return {
-      store: { version: STORE_VERSION, threshold: DEFAULT_THRESHOLD, sessions: {} },
+      store: { version: STORE_VERSION, threshold: DEFAULT_THRESHOLD, sessions: {}, officialProviders: [], knownProviders: [] },
       migrated: false,
     }
   }
