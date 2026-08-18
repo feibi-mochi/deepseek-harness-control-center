@@ -106,7 +106,9 @@ function loadClientBundle(React, globals = {}, windowOverrides = {}) {
 
 function createHookRenderer() {
   const hooks = []
+  const pendingEffects = []
   let cursor = 0
+  let effectsEnabled = false
   const React = {
     Fragment: Symbol('Fragment'),
     createElement(type, props, ...children) {
@@ -127,14 +129,27 @@ function createHookRenderer() {
         hooks[index] = typeof value === 'function' ? value(hooks[index]) : value
       }]
     },
-    useEffect() { cursor++ },
+    // Effects stay no-ops unless a test opts in via render(..., { flushEffects: true });
+    // collected callbacks then run right after the render pass so fetch-driven
+    // state can settle before a follow-up render.
+    useEffect(fn) {
+      const index = cursor++
+      if (effectsEnabled && !(index in hooks)) { hooks[index] = null; pendingEffects.push(fn) }
+      else if (!(index in hooks)) hooks[index] = null
+    },
     useLayoutEffect() { cursor++ },
   }
   return {
     React,
-    render(Component, props) {
+    render(Component, props, options) {
       cursor = 0
-      return Component(props)
+      effectsEnabled = !!(options && options.flushEffects)
+      const tree = Component(props)
+      if (pendingEffects.length > 0) {
+        const fns = pendingEffects.splice(0)
+        for (const fn of fns) fn()
+      }
+      return tree
     },
   }
 }
@@ -475,6 +490,8 @@ test('official cost is accumulated at usage time and remains stable later', () =
     version: 2,
     threshold: 5,
     sessions: { current: { official: bucket, third: { models: {} } } },
+    officialProviders: [],
+    knownProviders: [],
   }, bj(2026, 8, 19, 22, 0))
   assert.ok(Math.abs(normalized.store.sessions.current.official.cost - 54.45) < 1e-12)
   assert.equal(normalized.migrated, false)
@@ -1494,4 +1511,50 @@ test('session cost follows the active account currency with a marked estimate', 
   const Section = exports.__testing.WalletSettingsSection
   const tree = renderer.render(Section, { close: () => {} })
   assert.ok(tree, 'the settings section still renders')
+})
+
+test('findAccount resolves stored accounts and nulls for unknown ids', async () => {
+  const mod = await freshAccountsModule()
+  const a = mod.addAccount('Alice', 'sk-alice-1234567890').account
+  mod.addAccount('Bob', 'sk-bob-1234567890')
+  assert.equal(mod.findAccount(a.id).name, 'Alice')
+  assert.equal(mod.findAccount('acc_missing'), null)
+})
+
+test('settings section renders populated data from the wallet APIs', async () => {
+  const renderer = createHookRenderer()
+  const mockFetch = (url) => Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve(
+      String(url).includes('/accounts')
+        ? { ok: true, activeId: 'acc_1', accounts: [{ id: 'acc_1', name: '主账户', maskedKey: 'sk-0***d649', active: true }] }
+        : { ok: true, balance: { available: true, total: 1.98, currency: 'USD' }, lowBalance: false, threshold: 3, accounts: { activeId: 'acc_1', activeName: '主账户', count: 1 }, session: { official: { cost: 0.05 } } }
+    ),
+  })
+  const { exports } = loadClientBundle(renderer.React, { fetch: mockFetch })
+  const Section = exports.__testing.WalletSettingsSection
+  // First render with effect flush: the fetches fire right after the pass.
+  renderer.render(Section, { close: () => {} }, { flushEffects: true })
+  await new Promise((resolve) => setTimeout(resolve, 30)) // let the responses settle into state
+  const tree = renderer.render(Section, { close: () => {} })
+  const text = JSON.stringify(tree)
+  assert.ok(text.includes('主账户'), 'the account row must render from live data')
+  assert.ok(/1.98/.test(text), 'the balance figure must render')
+})
+
+test('provider aliasing: wrapper routes can join the official bucket (Issue #21)', async () => {
+  const { isOfficialProvider, normalizeProviderList, normalizeStoreData } = await import('../index.js')
+  assert.equal(isOfficialProvider('deepseek-official'), true)
+  assert.equal(isOfficialProvider('deepseek-official', []), true)
+  assert.equal(isOfficialProvider('deepseek-vision'), false)
+  assert.equal(isOfficialProvider('deepseek-vision', ['deepseek-vision']), true, 'a whitelisted wrapper route must bill officially')
+  assert.equal(isOfficialProvider('deepseek-vision', 'deepseek-vision'), false, 'a non-array whitelist must not match')
+
+  assert.deepEqual(normalizeProviderList(null), [])
+  assert.deepEqual(normalizeProviderList(['a', 'a', 'deepseek-official', 42, '']), ['a'], 'dedupe, drop junk and the builtin name')
+  const withProviders = normalizeStoreData({ officialProviders: ['deepseek-vision'], knownProviders: ['deepseek-vision'] })
+  assert.deepEqual(withProviders.store.officialProviders, ['deepseek-vision'])
+  assert.deepEqual(withProviders.store.knownProviders, ['deepseek-vision'])
+  const bare = normalizeStoreData({})
+  assert.deepEqual(bare.store.officialProviders, [], 'old stores migrate with empty provider lists')
 })

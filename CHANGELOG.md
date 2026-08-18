@@ -7,6 +7,11 @@ All notable changes to this project are documented in this file.
 - 新增多账户管理与热切换：面板内“账户管理”可添加多个账户（名称 + API Key），切换后无需重启，下一次 LLM 调用即按新账户计费；key 界面掩码显示，余额查询跟随当前账户（contributed in PR #4 by mxchen-xyz）。 / Added multi-account management with hot switching: manage accounts in the panel, and the very next LLM call is billed with the newly activated key — no restart needed; keys stay masked in the UI and balance follows the active account.
 - 面板视觉重做：余额横排摘要卡、设置合并为分组卡片（胶囊开关、行内滑块、阈值保存贴边）、账户列表限高两行滚动、主操作并列与安静的清除入口。 / Restyled the panel: horizontal balance summary card, grouped settings card (chip toggles, inline slider, threshold save inline), two-row scrollable account list, and paired primary actions with a quiet destructive entry.
 - 宿主设置面板（视觉工具下方）新增「钱包」设置页：余额、阈值、显示内容、芯片比例、完成提醒与账户管理，与标签面板实时同步。 / Added a 钱包 (Wallet) page to the host settings panel below Visual tools: balance, threshold, visibility, chip scale, completion reminders, and account management, kept in sync with the chip panel.
+- 设置页钱包页两列网格布局铺满宿主内容列，余额行横排。 / The settings wallet page lays controls out in a two-column grid that fills the host settings column.
+- 会话花费跟随当前账户货币：美元账户显示「本约 $x」（按 CNY 价折算的估算值，标签承担约算含义），人民币账户显示精确的「本场 ¥x」。 / Session cost follows the active account currency: USD accounts show 本约 $x (a labeled estimate converted from the CNY table), CNY accounts show the exact 本场 figure.
+- 芯片上低于显示精度的会话花费（如 $0.00）直接隐藏，面板照常显示，高缩放下更容易保持完整布局。 / Sub-cent session spend is hidden on the chip (kept in panels) so the full layout survives high scale factors.
+- 输入框位置缩放上限进一步收紧为 105%（悬浮/侧边仍 125%）。
+- 包装官方的路由（如 dsh-vision-proxy 的 deepseek-vision）可勾选计入官方计费桶：设置页新增「Provider 分桶」，自动列出出现过的 provider，勾选即按官方价格计入本场花费（Fixes #21, reported by @wenjie0112）。 / Wrapper provider routes (e.g. deepseek-vision from dsh-vision-proxy) can be checked into the official billing bucket: the settings page gains a Provider section listing observed providers; checked ones bill officially. / The composer-docked scale cap tightens to 105% (floating and side docks keep 125%).
 
 ## 0.1.5 - 2026-08-18
 
