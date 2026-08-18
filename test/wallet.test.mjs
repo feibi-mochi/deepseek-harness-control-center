@@ -629,9 +629,9 @@ test('home chip keeps a clickable compact value when the composer slot shrinks',
   assert.match(source, /\.dshw_anchorHome\.dshw_compact \.dshw_recharge\{display:none\}/)
   assert.match(source, /\.dshw_anchorHome\.dshw_fit \.dshw_chipMain>span:not\(\.dshw_homePrimary\)\{display:none\}/, 'a tight row must degrade to balance plus recharge before collapsing to the bare value')
   assert.match(source, /chipNode\.clientWidth >= chipNode\.scrollWidth - 1 \? 'fit' : 'compact'/, 'home sizing must let the composer row decide between full, fit, and compact modes')
-  assert.match(source, /dock === 'home' ? 1.05 : 1.25/, 'the scale cap must tighten to 105% while the chip is docked in the composer')
+  assert.match(source, /dock === 'home' \? 1\.05 : 1\.25/, 'the scale cap must tighten to 105% while the chip is docked in the composer')
   assert.match(source, /max: String\(scaleMaxPercent\)/, 'the slider max must follow the dock-specific scale cap')
-  assert.match(source, /chipScaleRef\.current > 1.05) saveChipScale(1.05)/, 'a stored 125% must clamp down when the chip returns home')
+  assert.match(source, /chipScaleRef\.current > 1\.05\) saveChipScale\(1\.05\)/, 'a stored 125% must clamp down when the chip returns home')
 
   const renderer = createHookRenderer()
   const { exports } = loadClientBundle(renderer.React)
