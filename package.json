@@ -1,12 +1,7 @@
 {
   "name": "deepseek-harness-wallet",
-<<<<<<< HEAD
-  "description": "Balance monitoring, per-session spend tracking, token statistics, low-balance alerts, official recharge shortcut, and multi-account management with hot account switching (view balance AND switch the LLM billing key) for DeepSeek Harness.",
+  "description": "Local-first account monitoring, usage accounting, official recharge, completion reminders, flexible layout, host-gated session controls, and multi-account management with hot account switching for DeepSeek Harness.",
   "version": "0.2.0",
-=======
-  "description": "Local-first account monitoring, usage accounting, official recharge, completion reminders, flexible layout, and host-gated session controls for DeepSeek Harness.",
-  "version": "0.1.5",
->>>>>>> origin/main
   "type": "module",
   "main": "index.js",
   "exports": {
