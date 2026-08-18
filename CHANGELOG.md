@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.0 - 2026-08-18
+
+- 新增多账户管理与热切换：面板内“账户管理”可添加多个账户（名称 + API Key），切换后无需重启，下一次 LLM 调用即按新账户计费；key 界面掩码显示，余额查询跟随当前账户（contributed in PR #4 by mxchen-xyz）。 / Added multi-account management with hot switching: manage accounts in the panel, and the very next LLM call is billed with the newly activated key — no restart needed; keys stay masked in the UI and balance follows the active account.
+- 余额标签右侧新增 ⚙ 设置入口，点击直接打开钱包设置面板。 / Added a ⚙ settings entry beside the balance chip that opens the control panel directly.
+
 ## 0.1.5 - 2026-08-18
 
 - 修复输入框内的余额标签被固定压缩成 44px 极简显示的问题，现在按实际可用空间在完整 / 紧凑 / 极简三档间自动切换。 / Fixed the composer chip always collapsing to its 44px compact value; it now switches between full, fit, and compact layouts by measured space.
