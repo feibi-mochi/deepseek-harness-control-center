@@ -233,7 +233,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.2.0')
+  assert.equal(pkg.version, '0.2.1')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -488,7 +488,8 @@ test('official cost is accumulated at usage time and remains stable later', () =
 
   const normalized = normalizeStoreData({
     version: 2,
-    threshold: 5,
+    thresholds: { CNY: 5 },
+    accountThresholds: {},
     sessions: { current: { official: bucket, third: { models: {} } } },
     officialProviders: [],
     knownProviders: [],
@@ -516,7 +517,7 @@ test('legacy stores migrate once and malformed counters are sanitized', () => {
   const first = normalizeStoreData(legacy, bj(2026, 8, 17, 22, 0))
   assert.equal(first.migrated, true)
   assert.equal(first.store.version, 2)
-  assert.equal(first.store.threshold, 7.25)
+  assert.equal(first.store.thresholds.CNY, 7.25)
   assert.equal(first.store.sessions.old.official.cost, 18.15)
   assert.equal(first.store.sessions.old.official.models['deepseek-v4-pro'].cacheWrite, 0)
   assert.equal(first.store.sessions.old.official.models['deepseek-v4-pro'].reasoning, 0)
@@ -670,6 +671,15 @@ test('docked chip escapes the composer stacking context', () => {
   assert.match(source, /outermost\.classList\.remove\('dshw_chipLift'\)/, 'the lift must be removed when the effect cleans up')
 })
 
+test('low-balance chip keeps a red frame and pulses inward', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /\.dshw_chipLow\{[^}]*border-color:[^;}]*state-error-primary[^}]*animation:dshwChipPulseIn/)
+  assert.match(source, /\.dshw_chipLow:hover,\.dshw_chipLow:focus-within\{border-color:[^;}]*state-error-primary/)
+  assert.match(source, /@keyframes dshwChipPulseIn/)
+  assert.match(source, /box-shadow:inset 0 0 0 3px rgba\(229,83,75,\.32\)/)
+  assert.match(source, /\.dshw_chipLow\.dshw_noBlink\{animation:none\}/)
+})
+
 test('official and third-party displays can be selected independently', () => {
   const renderer = createHookRenderer()
   const { exports, window } = loadClientBundle(renderer.React)
@@ -720,19 +730,26 @@ test('completion reminders support manual close and bounded timeout choices', ()
   let tree = renderer.render(Component, { sessionId: 'session-1' })
   findElement(tree, (element) => element.type === 'button' && element.props.className === 'dshw_chipMain').props.onClick()
   tree = renderer.render(Component, { sessionId: 'session-1' })
-  const toggle = findElement(tree, (element) => element.type === 'input' && element.props['aria-label'] === '开启对话完成后提醒')
-  const timeout = findElement(tree, (element) => element.type === 'select' && element.props['aria-label'] === '提醒自动关闭时间')
-  assert.equal(toggle.props.checked, true)
-  assert.equal(timeout.props.value, '10')
-  assert.deepEqual(timeout.props.children.map((option) => option.props.value), ['0', '5', '10', '30', '60'])
+  // The reminder toggle and its timeout merged into one select (compact card)
+  const select = findElement(tree, (element) => element.type === 'select' && element.props['aria-label'] === '完成提醒')
+  assert.ok(select, 'the merged reminder select must render')
+  assert.equal(select.props.value, '10')
+  assert.deepEqual(select.props.children.map((option) => option.props.value), ['off', '5', '10', '30', '60', 'keep'])
 
-  timeout.props.onChange({ target: { value: '0' } })
+  select.props.onChange({ target: { value: 'keep' } })
   tree = renderer.render(Component, { sessionId: 'session-1' })
   assert.equal(
-    findElement(tree, (element) => element.type === 'select' && element.props['aria-label'] === '提醒自动关闭时间').props.value,
-    '0',
+    findElement(tree, (element) => element.type === 'select' && element.props['aria-label'] === '完成提醒').props.value,
+    'keep',
   )
   assert.equal(window.localStorage.getItem('dshw-completion-notify-v1'), JSON.stringify({ enabled: true, timeout: 0 }))
+
+  select.props.onChange({ target: { value: 'off' } })
+  tree = renderer.render(Component, { sessionId: 'session-1' })
+  assert.equal(
+    findElement(tree, (element) => element.type === 'select' && element.props['aria-label'] === '完成提醒').props.value,
+    'off',
+  )
 })
 
 test('simultaneous completions are deduplicated and displayed as a single-file queue', async () => {
@@ -1120,7 +1137,7 @@ test('unsupported hosts disable the permanent-delete control instead of exposing
   const toggle = findElement(tree, (element) => element.type === 'input' && element.props['aria-label'] === '开启永久删除会话')
   assert.equal(toggle.props.disabled, true)
   assert.equal(toggle.props.checked, false)
-  assert.ok(findElement(tree, (element) => element.props && element.props.children === '宿主不支持'))
+  assert.ok(findElement(tree, (element) => element.props && String(element.props.children || '').includes('不支持')), 'unsupported hosts must mark the permanent-delete control as unsupported')
 })
 
 test('compatible hosts enable the permanent-delete preference through capability discovery', () => {
@@ -1495,10 +1512,14 @@ test('host settings section renders the restyled card without crashing', () => {
   let tree = renderer.render(Section, { close: function () {} })
   // 异步 fetch 完成后再渲染一帧(错误/空数据分支)
   tree = renderer.render(Section, { close: function () {} })
-  const balanceCard = findElement(tree, (element) => element.props && String(element.props.className || '').includes('dshw_balanceCard'))
+  const balanceCard = findElement(tree, (element) => element.props && String(element.props.className || '').includes('dshw_settingsHero'))
   const setCard = findElement(tree, (element) => element.props && String(element.props.className || '').includes('dshw_setCard'))
-  assert.ok(balanceCard, 'the settings section must render the balance card')
+  const heading = findElement(tree, (element) => element.props && element.props.className === 'dshw_settingsHeading')
+  const reminderCard = findElement(tree, (element) => element.props && String(element.props.className || '').includes('dshw_reminderCard'))
+  assert.ok(balanceCard, 'the settings section must render the account overview card')
   assert.ok(setCard, 'the settings section must render the grouped settings card')
+  assert.ok(heading, 'the redesigned settings section must establish a clear page heading')
+  assert.ok(reminderCard, 'reminder and session controls must stay grouped')
 })
 
 test('session cost follows the active account currency with a marked estimate', () => {
@@ -1565,7 +1586,7 @@ test('both panels surface the wallet version, locked to package.json', () => {
   const m = source.match(/WALLET_VERSION = '([^']+)'/)
   assert.ok(m, 'the client bundle must declare WALLET_VERSION')
   assert.equal(m[1], pkg.version, 'WALLET_VERSION must match package.json')
-  assert.ok(source.includes("'v' + WALLET_VERSION"), 'the detail panel header must show the version')
+  assert.ok((source.match(/DeepSeek Harness Control Center v' \+ WALLET_VERSION/g) || []).length >= 2, 'both the detail panel footer and the float panel footer must show the version')
   assert.ok(source.includes("'DeepSeek Harness Control Center v' + WALLET_VERSION"), 'the settings page footer must show the version')
   const renderer = createHookRenderer()
   const { exports } = loadClientBundle(renderer.React)

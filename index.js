@@ -110,6 +110,41 @@ export function normalizeThreshold(value) {
   return Math.min(100000, Math.max(0, Math.round(parsed * 100) / 100))
 }
 
+// Low-balance thresholds are per-currency: a USD account warns against its
+// own $ threshold, a CNY account against its own ¥ one; they never compare
+// across currencies. The legacy single-value store migrates into CNY.
+// Per-ACCOUNT thresholds: two accounts in the same currency may keep
+// different warning lines ("one account is 1, another is 2"). Keyed by
+// account id; the per-currency map stays as the fallback for the
+// no-active-account (system key) case and as the migration source.
+export function normalizeAccountThresholds(value) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const out = {}
+  for (const [id, raw] of Object.entries(source)) {
+    if (typeof id !== 'string' || id === '' || id.length > 100) continue
+    if (id === '__proto__' || id === 'prototype' || id === 'constructor') continue
+    const parsed = Number.parseFloat(raw)
+    if (!Number.isFinite(parsed)) continue
+    out[id] = Math.min(100000, Math.max(0, Math.round(parsed * 100) / 100))
+    if (Object.keys(out).length >= 50) break
+  }
+  return out
+}
+
+export function normalizeThresholds(value) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const out = {}
+  for (const [code, raw] of Object.entries(source)) {
+    if (!/^[A-Z]{3}$/.test(code)) continue
+    if (code === '__proto__' || code === 'prototype' || code === 'constructor') continue
+    const parsed = Number.parseFloat(raw)
+    if (!Number.isFinite(parsed)) continue
+    out[code] = Math.min(100000, Math.max(0, Math.round(parsed * 100) / 100))
+    if (Object.keys(out).length >= 20) break
+  }
+  return out
+}
+
 function finiteCounter(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
 }
@@ -188,7 +223,8 @@ export function normalizeStoreData(value, atMs = Date.now()) {
   }
   const normalized = {
     version: STORE_VERSION,
-    threshold: normalizeThreshold(source.threshold),
+    thresholds: normalizeThresholds(source.thresholds && Object.keys(source.thresholds).length > 0 ? source.thresholds : { CNY: normalizeThreshold(source.threshold) }),
+    accountThresholds: normalizeAccountThresholds(source.accountThresholds),
     sessions,
     officialProviders: normalizeProviderList(source.officialProviders),
     knownProviders: normalizeProviderList(source.knownProviders),
@@ -201,7 +237,7 @@ function loadStore() {
     return normalizeStoreData(JSON.parse(readFileSync(STORE_PATH, 'utf8')))
   } catch {
     return {
-      store: { version: STORE_VERSION, threshold: DEFAULT_THRESHOLD, sessions: {}, officialProviders: [], knownProviders: [] },
+      store: { version: STORE_VERSION, thresholds: { CNY: DEFAULT_THRESHOLD }, accountThresholds: {}, sessions: {}, officialProviders: [], knownProviders: [] },
       migrated: false,
     }
   }
@@ -346,6 +382,11 @@ export function removeAccount(id) {
   const index = accounts.accounts.findIndex((account) => account.id === id)
   if (index < 0) return { ok: false, error: 'account not found' }
   accounts.accounts.splice(index, 1)
+  // Drop the account's own threshold line along with it.
+  if (store.accountThresholds && Object.hasOwn(store.accountThresholds, id)) {
+    delete store.accountThresholds[id]
+    scheduleAccountsSave(null)
+  }
   // Deliberately NOT unsetting the credentials seam: the key currently in
   // .credentials.yaml keeps working for LLM billing; the UI just reports
   // "no active account" and balance falls back to the seam key.
@@ -551,13 +592,14 @@ function sessionView(sessionId) {
     official: {
       tokens: official,
       cost: session.official.priced === true ? session.official.cost : null,
+      priced: session.official.priced === true,
       models: session.official.models,
     },
     third: { tokens: third, models: session.third.models },
   }
 }
 
-function snapshotView(sessionId, threshold) {
+function snapshotView(sessionId) {
   const currency = balanceCurrency(balance.balances)
   const active = activeAccount()
   return {
@@ -571,10 +613,19 @@ function snapshotView(sessionId, threshold) {
       error: balance.available ? null : balance.error,
     },
     session: sessionView(sessionId),
-    threshold,
-    // The configured threshold is CNY-denominated; do not compare unlike
-    // currencies for international accounts that do not expose a CNY row.
-    lowBalance: balance.available && currency === 'CNY' && threshold > 0 && balanceTotal() < threshold,
+    // Thresholds are per-ACCOUNT first (each account keeps its own line even
+    // in the same currency); the per-currency map only serves the
+    // no-active-account case and inherits into accounts without one yet.
+    threshold: active !== null
+      ? (store.accountThresholds[active.id] ?? store.thresholds[currency || 'CNY'] ?? 0)
+      : (store.thresholds[currency || 'CNY'] ?? 0),
+    lowBalance: balance.available && currency !== null
+      && (function () {
+        const line = active !== null
+          ? (store.accountThresholds[active.id] ?? store.thresholds[currency] ?? 0)
+          : (store.thresholds[currency] ?? 0)
+        return line > 0 && balanceTotal() < line
+      })(),
     rechargeUrl: RECHARGE_URL,
     accounts: {
       activeId: accounts.activeId,
@@ -637,12 +688,10 @@ export function apply(ctx, config) {
     storeNeedsSave = false
     scheduleSave(ctx.logger)
   }
-  // Threshold lives ONLY in the persisted store; an explicit row config may
-  // still override it for power users, but the bundle patch sets none.
-  let threshold = store.threshold
+  // Thresholds live ONLY in the persisted store; an explicit row config may
+  // still override the CNY line for power users, but the bundle patch sets none.
   if (Number.isFinite(config.threshold)) {
-    threshold = normalizeThreshold(config.threshold)
-    store.threshold = threshold
+    store.thresholds = normalizeThresholds({ ...store.thresholds, CNY: normalizeThreshold(config.threshold) })
     scheduleSave(ctx.logger)
   }
 
@@ -694,7 +743,7 @@ export function apply(ctx, config) {
       path: '/api/wallet/snapshot',
       handler: (req, res) => {
         if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
-        return json(res, 200, snapshotView(sessionParam(req), threshold))
+        return json(res, 200, snapshotView(sessionParam(req)))
       },
     })
     const disposeThreshold = ctx.webServer.register({
@@ -706,10 +755,19 @@ export function apply(ctx, config) {
         if (body === null || typeof body.threshold !== 'number' || !Number.isFinite(body.threshold)) {
           return json(res, 400, { ok: false, error: 'threshold must be a number' })
         }
-        threshold = Math.min(100000, Math.max(0, Math.round(body.threshold * 100) / 100))
-        store.threshold = threshold
+        const currency = typeof body.currency === 'string' && /^[A-Z]{3}$/.test(body.currency) ? body.currency : (balanceCurrency(balance.balances) || 'CNY')
+        if (currency === '__proto__' || currency === 'prototype' || currency === 'constructor') return json(res, 400, { ok: false, error: 'bad currency' })
+        const clamped = Math.min(100000, Math.max(0, Math.round(body.threshold * 100) / 100))
+        // An active account keeps its own threshold line; only the system-key
+        // mode writes the shared per-currency map.
+        const active = activeAccount()
+        if (active !== null) {
+          store.accountThresholds = normalizeAccountThresholds({ ...store.accountThresholds, [active.id]: clamped })
+        } else {
+          store.thresholds = normalizeThresholds({ ...store.thresholds, [currency]: clamped })
+        }
         scheduleSave(ctx.logger)
-        return json(res, 200, { ok: true, threshold: threshold })
+        return json(res, 200, { ok: true, threshold: clamped, currency, accountId: active !== null ? active.id : null })
       },
     })
     const disposeRefresh = ctx.webServer.register({
@@ -797,7 +855,11 @@ export function apply(ctx, config) {
         if (body === null || typeof body.id !== 'string') return json(res, 400, { ok: false, error: 'id is required' })
         const result = await activateAccount(ctx, body.id)
         if (!result.ok) return json(res, 400, { ok: false, error: result.error })
-        return json(res, 200, { ok: true, account: result.account })
+        // Carry the account's own threshold so the input can jump instantly,
+        // before the balance refresh lands.
+        const currency = balanceCurrency(balance.balances) || 'CNY'
+        const threshold = store.accountThresholds[result.account.id] ?? store.thresholds[currency] ?? 0
+        return json(res, 200, { ok: true, account: result.account, threshold })
       },
     })
     const disposeRemove = ctx.webServer.register({

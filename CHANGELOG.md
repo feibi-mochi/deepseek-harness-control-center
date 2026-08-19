@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.1 - 2026-08-20
+
+- 标签上「本场」恢复常显（¥0.00 也显示，新会话不再缺席）；仅未定价模型仍隐藏。/ The chip shows the session cost again even at ¥0.00; only unpriced models stay hidden.
+- 面板/浮动窗版本号移至底部右下角，不再与顶栏按钮挤压。 / Panel version tags moved to the footer, clear of the header buttons.
+
 ## 0.2.0 - 2026-08-18
 
 - 新增多账户管理与热切换：面板内“账户管理”可添加多个账户（名称 + API Key），切换后无需重启，下一次 LLM 调用即按新账户计费；key 界面掩码显示，余额查询跟随当前账户（contributed in PR #4 by mxchen-xyz）。 / Added multi-account management with hot switching: manage accounts in the panel, and the very next LLM call is billed with the newly activated key — no restart needed; keys stay masked in the UI and balance follows the active account.
