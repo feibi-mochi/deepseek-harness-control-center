@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "integration": "dsh-session-delete",
-  "packageVersion": "0.1.4",
+  "packageVersion": "0.2.0",
   "upstream": {
     "repository": "https://github.com/deepseek-ai/DeepSeek-Harness",
     "commit": "47f943859bef60e4160492346772ded9b24f765a",
