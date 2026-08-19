@@ -38,6 +38,7 @@
 - The first account added becomes the active account automatically and is synced into the credentials seam.
 - Switching prompts a confirmation because it changes **LLM billing** for subsequent requests: the switch writes the account key into the credentials seam (`credentials.set('DEEPSEEK_API_KEY', ...)`), and since the llm-deepseek provider route resolves that reference per request, the very next LLM call is billed with the new account — no restart needed.
 - Account keys are stored plaintext in `$DSH_HOME/storages/accounts.json`; the UI only ever shows masked keys. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
+- Session cost follows the active account's currency: USD-settled accounts show `本约 $x` — a clearly-labeled estimate converted from the CNY price table at the vendor's long-standing list ratio (not a live FX rate); CNY accounts show the exact `本场 ¥x`.
 - If `DEEPSEEK_API_KEY` is supplied by the launching environment, switching is refused with a clear error (the credentials provider rejects shadowed writes) — unset it in your shell to enable switching.
 
 
