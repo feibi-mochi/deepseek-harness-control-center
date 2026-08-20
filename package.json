@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-wallet",
   "description": "Local-first account monitoring, usage accounting, official recharge, completion reminders, flexible layout, host-gated session controls, and multi-account management with hot account switching for DeepSeek Harness.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "main": "index.js",
   "exports": {

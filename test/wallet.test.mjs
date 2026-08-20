@@ -233,7 +233,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.2.1')
+  assert.equal(pkg.version, '0.2.2')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -1593,4 +1593,155 @@ test('both panels surface the wallet version, locked to package.json', () => {
   const tree = renderer.render(exports.__testing.WalletSettingsSection, { close: () => {} })
   const text = JSON.stringify(tree)
   assert.ok(text.includes('v' + pkg.version), 'the rendered settings section carries the version')
+})
+
+test('peak ring clock registers on the sidebar footer slot, not the settings page', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /ctx\.slots\.inject\('sidebar\.footer\.action'/, 'the ring must register through the host sidebar footer slot')
+  assert.match(source, /id: 'wallet-peak-ring'/, 'the footer entry needs its list-slot id')
+  assert.match(source, /function PeakRingFooter/, 'the footer component must exist')
+  // The ring once sat inside the settings hero; that placement was wrong and
+  // must stay gone.
+  assert.doesNotMatch(source, /dshw_peakHero|dshw_peakRingBox|key: 'peakhero'/, 'the settings page must not embed the ring clock')
+  // Design-sheet commitments: warning/success color pair, triangle pointer,
+  // zero in-ring text, an independent switch, and reminder dedup storage.
+  assert.match(source, /\.dshw_ringOff\{stroke:var\(--dsw-alias-state-success-primary/, 'off-peak arcs use the success color family')
+  assert.match(source, /\.dshw_ringPeak\{stroke:var\(--dsw-alias-state-error-primary/, 'peak arcs use the warning color family')
+  assert.match(source, /React\.createElement\('polygon', \{ key: 'ptr'/, 'the pointer is a small triangle, not a dot')
+  assert.match(source, /PEAK_RING_KEY/, 'the ring carries its own persisted switch')
+  assert.match(source, /PEAK_NOTIFY_LAST_KEY/, 'switch reminders dedup through a persisted boundary marker')
+})
+
+test('sidebar foot ring renders the live peak windows and status labels', async () => {
+  const renderer = createHookRenderer()
+  const mockFetch = () => Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({
+      ok: true,
+      pricingWindows: {
+        timezone: 'Asia/Shanghai',
+        offsetMinutes: 480,
+        windows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+        offPeakRate: 0.5,
+      },
+    }),
+  })
+  const { exports } = loadClientBundle(renderer.React, { fetch: mockFetch }, { setInterval: () => 0, clearInterval: () => {} })
+  const Ring = exports.__testing.PeakRingFooter
+  assert.equal(typeof Ring, 'function', 'PeakRingFooter must be exported for render coverage')
+  renderer.render(Ring, {}, { flushEffects: true })
+  await new Promise((resolve) => setTimeout(resolve, 30)) // let snapshot settle
+  const tree = renderer.render(Ring, { wide: true })
+  assert.ok(tree, 'the wide footer row must render once the policy arrives')
+  const row = findElement(tree, (el) => el.props && String(el.props.className || '').includes('dshw_footRing'))
+  assert.ok(row, 'the 38px foot-row box must be present')
+  assert.ok(!String(row.props.className).includes('dshw_footRingRail'), 'wide mode keeps the row shape')
+  const svg = findElement(tree, (el) => el.type === 'svg')
+  assert.ok(svg, 'the ring clock SVG must render')
+  assert.equal(svg.props.width, 50, 'the wide row sets ring size to 50px')
+
+  // Tooltip carries full detail
+  assert.match(row.props.title, /峰谷时钟 · 当前(高峰|低谷半价)/, 'tooltip names the current period')
+  assert.match(row.props.title, /还有 \d+ (小时 ?\d* ?分?|分钟)/, 'tooltip counts down to next switch')
+  assert.match(row.props.title, /09:00–12:00 \/ 14:00–18:00/, 'tooltip lists both windows')
+  assert.match(row.props['aria-label'], /(按标准价计费|按平价的 0\.5 倍计费)/, 'aria text states price meaning')
+
+  // Status label & money display
+  const label = findElement(tree, (el) => el.props && String(el.props.className || '').includes('dshw_footRingLabel'))
+  assert.ok(label, 'wide mode renders the status label')
+  const money = findElement(tree, (el) => el.props && String(el.props.className || '').includes('dshw_footRingMoney'))
+  assert.ok(money, 'wide mode renders the balance and session cost line')
+
+  // Triangle pointer + boundary ticks
+  assert.ok(findElement(tree, (el) => el.type === 'polygon'), 'the pointer is a triangle')
+  const peakArc = findElement(tree, (el) => el.props && String(el.props.className || '').includes('dshw_ringPeak'))
+  assert.ok(peakArc, 'peak arcs are painted with warning family')
+  const offArc = findElement(tree, (el) => el.props && String(el.props.className || '').includes('dshw_ringOff'))
+  assert.ok(offArc, 'off-peak arcs are painted with success family')
+})
+
+test('sidebar foot ring collapses to the rail circle, goes neutral without policy', async () => {
+  const renderer = createHookRenderer()
+  const mockFetch = () => Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({
+      ok: true,
+      pricingWindows: { windows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }] },
+    }),
+  })
+  const { exports } = loadClientBundle(renderer.React, { fetch: mockFetch }, { setInterval: () => 0, clearInterval: () => {} })
+  const Ring = exports.__testing.PeakRingFooter
+  renderer.render(Ring, { wide: false }, { flushEffects: true })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  const rail = renderer.render(Ring, { wide: false })
+  const circle = findElement(rail, (el) => el.props && String(el.props.className || '').includes('dshw_footRingRail'))
+  assert.ok(circle, 'rail mode renders the 40px circle variant')
+  const svg = findElement(rail, (el) => el.type === 'svg')
+  assert.equal(svg.props.width, 36, 'the rail ring sets size to 36px')
+
+  // Policy missing or unreachable: neutral unconfigured ring
+  const failing = createHookRenderer()
+  const failingFetch = () => Promise.reject(new Error('down'))
+  const { exports: bareExports, window: bareWindow } = loadClientBundle(failing.React, { fetch: failingFetch }, { setInterval: () => 0, clearInterval: () => {} })
+  bareWindow.localStorage.setItem('dshw-peakring-v1', 'false')
+  failing.render(bareExports.__testing.PeakRingFooter, {}, { flushEffects: true })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(failing.render(bareExports.__testing.PeakRingFooter, {}), null, 'switch off removes the sidebar seat')
+
+  // Switch back on: neutral unconfigured ring
+  const neutralBundle = createHookRenderer()
+  const { exports: neutralExports } = loadClientBundle(neutralBundle.React, { fetch: failingFetch }, { setInterval: () => 0, clearInterval: () => {} })
+  neutralBundle.render(neutralExports.__testing.PeakRingFooter, {}, { flushEffects: true })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  const neutral = neutralBundle.render(neutralExports.__testing.PeakRingFooter, {})
+  assert.ok(neutral, 'the seat stays mounted with a neutral ring')
+  assert.match(neutral.props.title, /计费时段未配置/, 'neutral tooltip claims no price')
+  assert.ok(findElement(neutral, (el) => el.props && String(el.props.className || '').includes('dshw_ringNeutral')), 'neutral arc paints gray')
+})
+
+test('peakClockState wraps midnight, keys reminders, and reads IANA wall time', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const state = exports.__testing.peakClockState
+  const wallHourIn = exports.__testing.wallHourIn
+  assert.equal(typeof state, 'function', 'peakClockState must be exported for unit coverage')
+  const policy = {
+    timezone: 'Asia/Shanghai', offsetMinutes: 480,
+    windows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+    offPeakRate: 0.5,
+  }
+  // 2026-08-20T12:00Z = Beijing 20:00: past every boundary, next switch 09:00.
+  const late = state(policy, 20, Date.parse('2026-08-20T12:00:00Z'))
+  assert.equal(late.inPeak, false)
+  assert.match(late.tip, /09:00 恢复标准价 · 还有 13 小时/, 'late evening points at tomorrow morning')
+  // Peak mid-morning: 12:00 ends the first window.
+  const peak = state(policy, 10.5, Date.parse('2026-08-20T02:30:00Z'))
+  assert.equal(peak.inPeak, true)
+  assert.match(peak.tip, /12:00 后半价/, 'peak tooltip announces the coming discount')
+  // Reminder ids: stable inside a period, distinct across the boundary.
+  assert.equal(state(policy, 10, 0).periodId, state(policy, 11.9, 0).periodId, 'same period, same id')
+  assert.notEqual(state(policy, 10, 0).periodId, state(policy, 13, 0).periodId, 'crossing a boundary changes the id')
+  assert.notEqual(state(policy, 10, 0).periodId, state(policy, 20, 0).periodId, 'peak and off-peak ids differ')
+  // Unconfigured policy collapses to the neutral state.
+  const neutral = state({ windows: [] }, 10, 0)
+  assert.equal(neutral.configured, false)
+  assert.match(neutral.tip, /计费时段未配置/)
+  assert.equal(neutral.periodId, null, 'no reminder fires without a policy')
+  // IANA wall time: Beijing 11:30 read from a UTC instant, plus offset fallback.
+  const bjHour = wallHourIn('Asia/Shanghai', 480, new Date('2026-08-20T03:30:00Z'))
+  assert.ok(Math.abs(bjHour - 11.5) < 0.01, 'Asia/Shanghai hour comes from IANA conversion')
+  const fallback = wallHourIn('Not/AZone', 480, new Date('2026-08-20T03:30:00Z'))
+  assert.ok(Math.abs(fallback - 11.5) < 0.01, 'unresolvable zones fall back to the policy offset')
+})
+
+test('settings expose the ring switch and the switch-reminder toggle', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const tree = renderer.render(exports.__testing.WalletSettingsSection, { close: () => {} })
+  const ringToggle = findElement(tree, (el) => el.props && el.props['aria-label'] === '显示侧边栏峰谷时钟')
+  const notifyToggle = findElement(tree, (el) => el.props && el.props['aria-label'] === '开启峰谷切换提醒')
+  assert.ok(ringToggle, 'the ring visibility switch must render in the settings quad')
+  assert.ok(notifyToggle, 'the peak switch-reminder toggle must render in the settings quad')
+  assert.equal(ringToggle.props.checked, true, 'the ring defaults to on')
+  assert.equal(notifyToggle.props.checked, false, 'reminders stay opt-in')
 })

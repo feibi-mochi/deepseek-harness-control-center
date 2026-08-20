@@ -23,6 +23,7 @@
 ```
 
 - **Official DeepSeek** — live balance (60s global refresh with fast boot retries), current-session cost locked to the price active for each usage event (including the 2026-08-17 peak/off-peak rollout), and token breakdown.
+- **24h peak/off-peak ring clock** — resident sidebar footer widget indicating real-time pricing windows (peak vs. 50% discount off-peak), countdown to next switch, and optional desktop switch notifications.
 - **Third-party total** — current-session tokens (input / cache read / output). No balance guessing, no cost math, zero configuration.
 - **Click the chip** to open the detail panel: correctly formatted per-currency balances, cost and token splits, a freely editable low-balance threshold in CNY (two decimals, persisted globally; alerts only compare a CNY balance and never mix currencies), manual refresh, and a jump to the official recharge page (first click shows the domain for confirmation — anti-phishing).
 - **Move, dock, and scale** — drag the chip freely, preview nearby snap targets, use compact horizontal or vertical layouts, adjust its scale from the control panel, and show official or third-party data independently. The choices are remembered locally.

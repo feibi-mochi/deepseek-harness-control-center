@@ -36,6 +36,10 @@ const BALANCE_REFRESH_MS = 60_000
 const STORE_VERSION = 2
 
 // Beijing (UTC+8, no DST) peak windows: 09:00-12:00 and 14:00-18:00.
+// Exposed to clients via snapshot.pricingWindows so the ring clock renders
+// from the active policy instead of hard-coding hours in the bundle.
+const PEAK_WINDOWS = [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }]
+const OFF_PEAK_RATE = 0.5
 const BEIJING_OFFSET_MS = 8 * 3600_000
 
 export function isBeijingPeak(atMs) {
@@ -627,6 +631,14 @@ function snapshotView(sessionId) {
         return line > 0 && balanceTotal() < line
       })(),
     rechargeUrl: RECHARGE_URL,
+    // Peak/off-peak policy for the ring clock; billed in Asia/Shanghai.
+    pricingWindows: {
+      timezone: 'Asia/Shanghai',
+      offsetMinutes: 480,
+      windows: PEAK_WINDOWS.map(w => ({ startHour: w.startHour, endHour: w.endHour })),
+      offPeakRate: OFF_PEAK_RATE,
+      isPeak: isBeijingPeak(Date.now()),
+    },
     accounts: {
       activeId: accounts.activeId,
       activeName: active !== null ? active.name : null,

@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.2 - 2026-08-20
+
+- 新增 24h 峰谷计费分时时钟：在侧边栏左下角常驻展示当前时段（高峰/低谷半价）、剩余倒计时、实时余额与本场/本约花费；折叠导轨模式下自动收拢为 42px 紧凑环形钟。 / Added a 24h peak/off-peak ring clock in the sidebar footer: live pricing window (peak / 50% off-peak), switch countdown, live balance and session spend; collapses into a 42px compact circle in rail mode.
+- 侧边栏时钟卡片视觉重构：三行式清爽信息流，字号与容器全面放大，右侧内置紧凑竖排「充值」按钮直达官方充值后台，消除横向挤压与文本截断。 / Restyled the sidebar footer card: three-line spacious flow, larger typography, and a compact vertical recharge button that opens official top-up without text truncation.
+- 峰谷切换系统通知：跨越峰谷时段时自动推送桌面系统通知（可在设置中随心开启/关闭），不错过半价调用的省钱窗口。 / Added peak/off-peak desktop switch reminders with a dedicated toggle in settings.
+- 跨组件毫秒级实时同步：输入框钱包芯片与侧边栏时钟卡片通过全局事件总线（`dshw-snapshot-update` / `dshw-refresh`）毫秒级联动，账户切换与会话消耗实时双向一致。 / Cross-component event sync: wallet composer chip and sidebar clock card stay 100% in sync across account switches and live session token usage.
+- 会话花费彻底杜绝 `--` 占位：始终常驻真实货币金额（无消耗显示 $0.00 / ¥0.00），随多币种账户（USD/CNY）实时切换对应格式与估算/精确标签。 / Always-visible numeric session cost: never drops to `--`, defaults to $0.00/¥0.00, and hot-adapts to active account currency (USD/CNY).
+
 ## 0.2.1 - 2026-08-20
 
 - 标签上「本场」恢复常显（¥0.00 也显示，新会话不再缺席）；仅未定价模型仍隐藏。/ The chip shows the session cost again even at ¥0.00; only unpriced models stay hidden.
