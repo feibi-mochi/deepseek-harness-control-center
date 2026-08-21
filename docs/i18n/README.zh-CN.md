@@ -3,7 +3,7 @@
 [![npm 版本](https://img.shields.io/npm/v/deepseek-harness-wallet?label=npm&color=5965d8)](https://www.npmjs.com/package/deepseek-harness-wallet)
 [![GitHub Release](https://img.shields.io/github/v/release/feibi-mochi/deepseek-harness-control-center?label=release&color=5965d8)](https://github.com/feibi-mochi/deepseek-harness-control-center/releases)
 [![构建检查](https://github.com/feibi-mochi/deepseek-harness-control-center/actions/workflows/validate.yml/badge.svg)](https://github.com/feibi-mochi/deepseek-harness-control-center/actions/workflows/validate.yml)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.0--rc.6-4aa3ff)](https://github.com/deepseek-ai/DeepSeek-Harness)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.0--rc.8-4aa3ff)](https://github.com/deepseek-ai/DeepSeek-Harness)
 [![MIT 许可证](https://img.shields.io/badge/license-MIT-3b7a57)](../../LICENSE)
 
 **DeepSeek Harness 监控、提醒、充值与会话控制中心。**
@@ -25,7 +25,8 @@
 - **官方 DeepSeek**——余额（60 秒全局刷新 + 启动快速重试）、本会话花费（每次用量按发生时价格锁定，含 2026-08-17 峰谷价）、token 拆分。
 - **24h 峰谷计费分时时钟**——侧边栏底部常驻环形钟，实时呈现当前时段（高峰/低谷半价优惠）、下一次切换倒计时与系统级桌面切换提醒。
 - **第三方合计**——本会话 token（输入 / 缓存读 / 输出）。不算钱、不猜余额、零配置。
-- **点开面板**——按币种正确显示符号的余额拆分、花费与 token 明细、可自由填写的低余额阈值（人民币、两位小数、全局持久化；仅在有人民币余额时提醒，绝不跨币种比较或相加）、手动刷新、跳转官方充值页（首次点击显示域名确认，防钓鱼）。
+- **Provider 分桶**——设置页会列出已观察到的包装路由；勾选后计入官方 token/花费桶，并按官方价格表计费。
+- **点开面板**——按币种正确显示符号的余额拆分、花费与 token 明细、可自由填写当前账户与币种的低余额阈值（两位小数、按账户持久化；绝不跨币种比较或相加）、手动刷新、跳转官方充值页（首次点击显示域名确认，防钓鱼）。
 - **移动、吸附与缩放**——标签可自由拖动，靠近目标区域时预览吸附位置，按空间切换紧凑横排或竖排；还可在控制面板中调整比例，并分别显示官方或第三方数据。设置均保存在本地。
 - **悬浮窗口**——明细面板可切换为位置记忆的拖动窗口，也可直接最小化为自由移动的圆点；低于阈值时圆点变红。
 - **对话完成提醒**——可选择常驻或定时关闭；多个对话同时完成时自动排队、去重，并协调多个标签页；系统通知不可用时改用页面内提醒。
@@ -127,7 +128,7 @@ window.__DSH_WALLET_ADAPTER__ = {
 
 | 项目 | 行为 |
 | --- | --- |
-| Token 计费 | 监听 `llm/stream` 事件，按 provider 分桶（`deepseek-official` 之外全部归第三方）、按会话隔离；每次用量同时锁定当时的官方价格，会话与峰谷时段都不串账。 |
+| Token 计费 | 监听 `llm/stream` 事件，按会话和 provider 分桶：`deepseek-official` 及明确勾选的包装路由进入官方桶，其他 provider 保持第三方桶；每次用量同时锁定当时的官方价格，会话与峰谷时段都不串账。 |
 | 余额 | 凭证库（或当前账户）的 key 只在本机流转，仅作为 `Authorization` 头发往官方 `/user/balance` 接口。 |
 | 账户 | key 存于 `$DSH_HOME/storages/accounts.json`（明文，与 harness 自身凭证存储一致）；界面只显示掩码，切换会把所选 key 写入凭证库用于 LLM 计费。 |
 | 会话日志 | 插件不写入任何事件；数据存于 `$DSH_HOME/storages/wallet.json`。 |

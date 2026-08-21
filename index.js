@@ -386,16 +386,18 @@ export function removeAccount(id) {
   const index = accounts.accounts.findIndex((account) => account.id === id)
   if (index < 0) return { ok: false, error: 'account not found' }
   accounts.accounts.splice(index, 1)
-  // Drop the account's own threshold line along with it.
+  // Drop the account's own threshold line along with it. The caller persists
+  // wallet.json separately from accounts.json when this flag is true.
+  let thresholdRemoved = false
   if (store.accountThresholds && Object.hasOwn(store.accountThresholds, id)) {
     delete store.accountThresholds[id]
-    scheduleAccountsSave(null)
+    thresholdRemoved = true
   }
   // Deliberately NOT unsetting the credentials seam: the key currently in
   // .credentials.yaml keeps working for LLM billing; the UI just reports
   // "no active account" and balance falls back to the seam key.
   if (accounts.activeId === id) accounts.activeId = null
-  return { ok: true }
+  return { ok: true, thresholdRemoved }
 }
 
 export function accountListView() {
@@ -485,12 +487,18 @@ function recordUsage(options, usage, atMs = Date.now()) {
   if (typeof sessionId !== 'string' || sessionId === '' || typeof provider !== 'string' || provider === '') return
   if (typeof model !== 'string' || model === '__proto__' || model === 'prototype' || model === 'constructor') return
   if (sessionId === '__proto__' || sessionId === 'prototype' || sessionId === 'constructor') return
+  // Remember every non-builtin route observed by the stream tap. The settings
+  // page can then promote wrapper routes into the official billing bucket.
+  if (provider !== OFFICIAL_PROVIDER && !store.knownProviders.includes(provider)) {
+    store.knownProviders = normalizeProviderList([...store.knownProviders, provider])
+  }
   if (!Object.hasOwn(store.sessions, sessionId)) {
     store.sessions[sessionId] = { official: emptyBucket(true), third: emptyBucket(false) }
   }
   const session = store.sessions[sessionId]
-  const bucket = provider === OFFICIAL_PROVIDER ? session.official : session.third
-  if (provider === OFFICIAL_PROVIDER) addOfficialUsage(bucket, model, usage, atMs)
+  const official = isOfficialProvider(provider, store.officialProviders)
+  const bucket = official ? session.official : session.third
+  if (official) addOfficialUsage(bucket, model, usage, atMs)
   else {
     if (!Object.hasOwn(bucket.models, model)) bucket.models[model] = emptyCounters()
     addUsage(bucket.models[model], usage)
@@ -503,13 +511,13 @@ let balanceRefresh = null
 async function performBalanceRefresh(ctx) {
   const credentials = ctx.get('credentials')
   if (credentials === undefined) {
-    balance = { fetchedAt: Date.now(), available: false, balances: [], error: 'no credentials service' }
+    balance = { fetchedAt: Date.now(), available: false, balances: [], error: 'no-credentials' }
     return
   }
   try {
     const key = await resolveBalanceKey(ctx)
     if (key === undefined || key === '') {
-      balance = { fetchedAt: Date.now(), available: false, balances: [], error: 'no API key' }
+      balance = { fetchedAt: Date.now(), available: false, balances: [], error: 'no-api-key' }
       return
     }
     const controller = new AbortController()
@@ -520,23 +528,36 @@ async function performBalanceRefresh(ctx) {
         headers: { authorization: 'Bearer ' + key },
         signal: controller.signal,
       })
-      if (!response.ok) throw new Error('status ' + response.status)
+      if (!response.ok) {
+        const code = response.status === 401 || response.status === 403
+          ? 'unauthorized'
+          : response.status === 429 ? 'rate-limited' : 'upstream-unavailable'
+        const error = new Error(code)
+        error.code = code
+        throw error
+      }
       const data = await response.json()
+      const available = data !== null && typeof data === 'object' && data.is_available === true
       balance = {
         fetchedAt: Date.now(),
-        available: data.is_available === true,
-        balances: Array.isArray(data.balance_infos) ? data.balance_infos : [],
-        error: null,
+        available,
+        balances: available && Array.isArray(data.balance_infos) ? data.balance_infos : [],
+        error: available ? null : 'balance-unavailable',
       }
     } finally {
       clearTimeout(timer)
     }
   } catch (error) {
+    const code = error && typeof error === 'object' && typeof error.code === 'string'
+      ? error.code
+      : error && typeof error === 'object' && error.name === 'AbortError'
+        ? 'timeout'
+        : error instanceof SyntaxError ? 'invalid-response' : 'upstream-unavailable'
     balance = {
       fetchedAt: Date.now(),
       available: false,
       balances: [],
-      error: error instanceof Error ? error.message : String(error),
+      error: code,
     }
   }
 }
@@ -836,7 +857,8 @@ export function apply(ctx, config) {
         if (body === null || typeof body.name !== 'string' || typeof body.apiKey !== 'string') {
           return json(res, 400, { ok: false, error: 'name and apiKey are required' })
         }
-        const needSync = accounts.activeId === null
+        const previousActiveId = accounts.activeId
+        const needSync = previousActiveId === null
         const result = addAccount(body.name, body.apiKey)
         if (!result.ok) return json(res, 400, { ok: false, error: result.error })
         scheduleAccountsSave(ctx.logger)
@@ -844,6 +866,13 @@ export function apply(ctx, config) {
         if (needSync) {
           // First account: activate it so the LLM seam follows the new key.
           sync = await activateAccount(ctx, result.account.id)
+          // addAccount marks the first row active optimistically. If the host
+          // refuses the credential write, roll it back so UI/balance state does
+          // not claim a billing account that the LLM route is not using.
+          if (!sync.ok && accounts.activeId === result.account.id) {
+            accounts.activeId = previousActiveId
+            scheduleAccountsSave(ctx.logger)
+          }
         }
         return json(res, 200, {
           ok: true,
@@ -884,6 +913,7 @@ export function apply(ctx, config) {
         const result = removeAccount(body.id)
         if (!result.ok) return json(res, 400, { ok: false, error: result.error })
         scheduleAccountsSave(ctx.logger)
+        if (result.thresholdRemoved) scheduleSave(ctx.logger)
         return json(res, 200, { ok: true, ...accountListView() })
       },
     })

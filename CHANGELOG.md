@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.3 - 2026-08-21
+
+- 修复 Provider 分桶实际未参与计费的问题；已勾选的包装路由现在真正进入官方 token/花费桶，并记录新观察到的 Provider。 / Fixed provider aliases not reaching the billing path: opted-in wrapper routes now enter the official token/cost bucket, and newly observed providers are recorded.
+- 修复首次添加账户时凭证同步失败仍显示为当前账户的问题；失败会回滚激活状态。 / Rolled back first-account activation when the host refuses credential synchronization.
+- 修复删除账户后账户专属阈值未写回钱包存储的问题。 / Persisted removal of account-specific thresholds when an account is deleted.
+- 余额错误改为安全枚举，避免把上游错误原文暴露到浏览器；美元/多余额记录的明细选择也统一。 / Replaced raw balance errors with safe enums and aligned multi-currency balance selection.
+- 统一提醒设置的本地存储格式，并兼容旧的毫秒字段；API Key 输入框默认隐藏。 / Unified reminder storage with migration from the legacy millisecond field and made API-key inputs password fields.
+
 ## 0.2.2 - 2026-08-20
 
 - 新增 24h 峰谷计费分时时钟：在侧边栏左下角常驻展示当前时段（高峰/低谷半价）、剩余倒计时、实时余额与本场/本约花费；折叠导轨模式下自动收拢为 42px 紧凑环形钟。 / Added a 24h peak/off-peak ring clock in the sidebar footer: live pricing window (peak / 50% off-peak), switch countdown, live balance and session spend; collapses into a 42px compact circle in rail mode.
