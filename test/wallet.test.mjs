@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -233,7 +233,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.2.2')
+  assert.equal(pkg.version, '0.2.3')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -724,6 +724,14 @@ test('completion reminders support manual close and bounded timeout choices', ()
   assert.deepEqual(
     { ...exports.__testing.normalizeNotifyConfig({ enabled: true, timeout: 17 }) },
     { enabled: true, timeout: 10 },
+  )
+  assert.deepEqual(
+    { ...exports.__testing.normalizeNotifyConfig({ enabled: true, autoCloseMs: null }) },
+    { enabled: true, timeout: 0 },
+  )
+  assert.deepEqual(
+    { ...exports.__testing.normalizeNotifyConfig({ enabled: false, autoCloseMs: 30000 }) },
+    { enabled: false, timeout: 30 },
   )
 
   const { Component } = walletComponent(exports)
@@ -1522,6 +1530,29 @@ test('host settings section renders the restyled card without crashing', () => {
   assert.ok(reminderCard, 'reminder and session controls must stay grouped')
 })
 
+test('client selects the balance row matching the server-selected currency', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const rows = [
+    { currency: 'USD', total_balance: '9.00' },
+    { currency: 'CNY', total_balance: '2.00' },
+  ]
+  assert.equal(exports.__testing.selectBalanceInfo({ currency: 'CNY', balances: rows }), rows[1])
+  assert.equal(exports.__testing.selectBalanceInfo({ currency: 'USD', balances: rows }), rows[0])
+  assert.equal(exports.__testing.selectBalanceInfo({ currency: 'EUR', balances: rows }), rows[0])
+  assert.equal(exports.__testing.selectBalanceInfo({ currency: 'CNY', balances: [] }), null)
+  assert.equal(exports.__testing.balanceErrorText('unauthorized'), 'API Key 无效或已过期')
+  assert.equal(exports.__testing.balanceErrorText('a raw upstream secret'), '余额暂不可用')
+})
+
+test('settings account API Key field is masked as a password input', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const tree = renderer.render(exports.__testing.WalletSettingsSection, { close: () => {} })
+  const keyInput = findElement(tree, element => element.type === 'input' && element.props['aria-label'] === 'API Key')
+  assert.ok(keyInput)
+  assert.equal(keyInput.props.type, 'password')
+})
 test('session cost follows the active account currency with a marked estimate', () => {
   const source = readProjectFile('lib/client.js')
   assert.match(source, /function sessionCostText/, 'a currency-aware session cost helper must exist')
@@ -1563,6 +1594,140 @@ test('settings section renders populated data from the wallet APIs', async () =>
   assert.ok(/1.98/.test(text), 'the balance figure must render')
 })
 
+function installWalletRouteHarness(mod, credentials) {
+  const routes = new Map()
+  let usageTap = null
+  const ctx = {
+    logger: { warn() {} },
+    get(key) { return key === 'credentials' ? credentials : undefined },
+    on(name, handler) { if (name === 'llm/stream') usageTap = handler },
+    effect(run) { return run() },
+    webServer: {
+      register(definition) {
+        routes.set(definition.path, definition.handler)
+        return () => routes.delete(definition.path)
+      },
+    },
+  }
+  mod.apply(ctx, {})
+  async function call(path, method, body, url = path) {
+    const handler = routes.get(path)
+    assert.equal(typeof handler, 'function', `missing route ${path}`)
+    const req = createRouteRequest(method, body, url)
+    const handled = Promise.resolve(handler(req, req.response))
+    const response = await req.send()
+    await handled
+    return { ...response, json: JSON.parse(response.body) }
+  }
+  return { call, usageTap }
+}
+
+test('provider aliases are actually billed in the official bucket after opt-in', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-provider-route-'))
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?provider-route-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const harness = installWalletRouteHarness(mod, undefined)
+    let response = await harness.call('/api/wallet/official-providers', 'POST', { providers: ['deepseek-vision'] })
+    assert.deepEqual(response.json.official, ['deepseek-vision'])
+    assert.equal(typeof harness.usageTap, 'function')
+    const downstream = async function* () {
+      yield { type: 'usage', usage: { inputTokens: 1000, outputTokens: 2000 } }
+    }
+    for await (const _ of harness.usageTap(
+      { sessionId: 'session-provider-route', provider: 'deepseek-vision', model: 'deepseek-v4-flash' },
+      () => downstream(),
+    )) {}
+    response = await harness.call(
+      '/api/wallet/snapshot',
+      'GET',
+      undefined,
+      '/api/wallet/snapshot?session=session-provider-route',
+    )
+    assert.equal(response.json.session.official.tokens.input, 1000)
+    assert.equal(response.json.session.official.tokens.output, 2000)
+    assert.ok(response.json.session.official.cost > 0)
+    assert.equal(response.json.session.third.tokens.input, 0)
+    assert.deepEqual(response.json.providers.known, [])
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 550))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('first account rolls back activeId when the host refuses credential synchronization', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-account-rollback-'))
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?account-rollback-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const harness = installWalletRouteHarness(mod, {
+      async set() { throw new Error('shadowed write refused') },
+      async resolve() { return undefined },
+    })
+    const response = await harness.call('/api/wallet/accounts', 'POST', {
+      name: '未同步账户', apiKey: 'sk-unsynced-1234567890',
+    })
+    assert.equal(response.json.ok, true)
+    assert.equal(response.json.synced, false)
+    assert.equal(response.json.account.active, false)
+    assert.equal((await harness.call('/api/wallet/accounts', 'GET')).json.activeId, null)
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 550))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('removing an account persists removal of its account-specific threshold', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-threshold-remove-'))
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?threshold-remove-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const harness = installWalletRouteHarness(mod, {
+      async set() {},
+      async resolve() { return undefined },
+    })
+    const account = mod.addAccount('阈值账户', 'sk-threshold-1234567890').account
+    await harness.call('/api/wallet/threshold', 'POST', { threshold: 4.25, currency: 'CNY' })
+    await harness.call('/api/wallet/accounts/remove', 'POST', { id: account.id })
+    await new Promise(resolve => setTimeout(resolve, 650))
+    const wallet = JSON.parse(readFileSync(join(dir, 'storages', 'wallet.json'), 'utf8'))
+    assert.equal(Object.hasOwn(wallet.accountThresholds || {}, account.id), false)
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 100))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('balance refresh returns safe error enums instead of upstream error text', async () => {
+  const previousHome = process.env.DSH_HOME
+  const previousFetch = globalThis.fetch
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-safe-error-'))
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?safe-error-' + dir.replace(/[\\/]/g, '_'))
+  globalThis.fetch = async () => ({ ok: false, status: 401, async json() { return {} } })
+  try {
+    const harness = installWalletRouteHarness(mod, {
+      async set() {},
+      async resolve() { return { value: 'sk-safe-error-1234567890' } },
+    })
+    const response = await harness.call('/api/wallet/refresh', 'POST')
+    assert.equal(response.json.ok, true)
+    const snapshot = await harness.call('/api/wallet/snapshot', 'GET')
+    assert.equal(snapshot.json.balance.error, 'unauthorized')
+    assert.doesNotMatch(JSON.stringify(snapshot.json), /sk-safe-error|status 401/)
+  } finally {
+    globalThis.fetch = previousFetch
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 100))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 test('provider aliasing: wrapper routes can join the official bucket (Issue #21)', async () => {
   const { isOfficialProvider, normalizeProviderList, normalizeStoreData } = await import('../index.js')
   assert.equal(isOfficialProvider('deepseek-official'), true)
