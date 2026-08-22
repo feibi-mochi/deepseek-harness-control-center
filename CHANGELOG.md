@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.4 - 2026-08-22
+
+- 彻底修复暗色模式（Dark Mode）主题适配（Issue #26）：移除所有未主题化的浅色硬编码回退（`--dsw-alias-bg-elevated,#fff`、`--dsw-alias-bg-overlay,#fff` 等），全站统一使用 DSH 原生主题变量（`--dsw-alias-bg-layer-*` 与 `--dsw-alias-label-dimmed`），在深色模式下完美融入背景。 / Fully fixed Dark Mode theme compliance (Issue #26): replaced unthemed hardcoded light fallbacks with DSH native theme variables (`--dsw-alias-bg-layer-*`), rendering dark themes seamlessly without blinding white boxes.
+- 新增峰谷时钟专属控制面板（Dedicated Control Panel）：点击时钟卡片即可就地弹出专属浮动控制面板，支持实时查看峰谷优惠说明、账户余额明细与快速充值，并提供排版切换、缩放调节与归位管理。 / Added a dedicated peak clock control popover: clicking the clock card opens an interactive panel for live rate info, quick recharge, orientation toggles, and layout controls.
+- 峰谷时钟支持自由拖拽与持久化记忆：卡片支持在屏幕上任意拖拽移动，脱离侧边栏限制（Portal 渲染），拖拽释放自动持久化坐标，并在浮动卡片右上角和控制面板提供一键「↩ 归位」回到侧边栏底部。 / Added free-floating drag & drop for the peak clock: smoothly movable across the viewport with boundary clamping, position persistence in localStorage, and one-click dock reset.
+- 峰谷时钟横向与纵向排版自由切换：支持标准的横向卡片与 ~140px 纤细纵向胶囊卡片（侧边栏内居中、浮动时轻巧紧凑）。 / Added customizable layout: seamlessly toggle between horizontal card layout and slim ~140px vertical capsule layout.
+- 充值按钮内嵌排版优化：将充值按钮移至第三行倒计时右侧，彻底消除竖排按钮对第二行金额造成的水平挤压与 `¥...` 截断问题，金额与本场消耗 100% 完整显示。 / Relocated recharge button inline next to the countdown row, completely eliminating text truncation on the balance and session cost line.
+- 新增时钟缩放滑条（100% ~ 120%）与充值按钮独立开关：支持按需放大时钟或收缩整体卡片尺寸。 / Added a dedicated scale slider (100% ~ 120%) and recharge button visibility toggle in both the popup panel and settings page.
+
 ## 0.2.3 - 2026-08-21
 
 - 修复 Provider 分桶实际未参与计费的问题；已勾选的包装路由现在真正进入官方 token/花费桶，并记录新观察到的 Provider。 / Fixed provider aliases not reaching the billing path: opted-in wrapper routes now enter the official token/cost bucket, and newly observed providers are recorded.

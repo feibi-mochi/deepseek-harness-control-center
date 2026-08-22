@@ -233,7 +233,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.2.3')
+  assert.equal(pkg.version, '0.2.4')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -1910,3 +1910,120 @@ test('settings expose the ring switch and the switch-reminder toggle', () => {
   assert.equal(ringToggle.props.checked, true, 'the ring defaults to on')
   assert.equal(notifyToggle.props.checked, false, 'reminders stay opt-in')
 })
+
+test('settings expose peak ring layout, scale slider (100-120%), recharge toggle and dock position', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const tree = renderer.render(exports.__testing.WalletSettingsSection, { close: () => {} })
+  const orientSelect = findElement(tree, (el) => el.props && el.props['aria-label'] === '峰谷时钟布局')
+  const scaleInput = findElement(tree, (el) => el.props && el.props['aria-label'] === '峰谷时钟卡片比例')
+  const rechargeToggle = findElement(tree, (el) => el.props && el.props['aria-label'] === '显示时钟充值按钮')
+  assert.ok(orientSelect, 'the layout orientation selector must render')
+  assert.equal(orientSelect.props.value, 'horizontal', 'default orientation is horizontal')
+  assert.ok(scaleInput, 'the peak clock scale slider must render')
+  assert.equal(scaleInput.props.min, '100', 'minimum scale is 100%')
+  assert.equal(scaleInput.props.max, '120', 'maximum scale is 120%')
+  assert.equal(scaleInput.props.step, '5', 'scale step is 5%')
+  assert.equal(scaleInput.props.value, '100', 'default scale is 100%')
+  assert.ok(rechargeToggle, 'the recharge toggle must render')
+  assert.equal(rechargeToggle.props.checked, true, 'recharge button defaults to visible')
+})
+
+test('peak ring footer supports vertical layout, hidden recharge, and floating mode with reset', async () => {
+  const mockFetch = () => Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({
+      ok: true,
+      pricingWindows: {
+        timezone: 'Asia/Shanghai', offsetMinutes: 480,
+        windows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+        offPeakRate: 0.5,
+      },
+      balance: { total: 100, currency: 'CNY' },
+      session: { official: { cost: 0.25 } }
+    }),
+  })
+
+  // 1. Vertical layout with recharge
+  const r1 = createHookRenderer()
+  const { exports: e1, window: w1 } = loadClientBundle(r1.React, { fetch: mockFetch }, { setInterval: () => 0, clearInterval: () => {} })
+  w1.localStorage.setItem('dshw-peak-orient-v1', 'vertical')
+  w1.localStorage.setItem('dshw-peak-recharge-v1', 'true')
+  r1.render(e1.__testing.PeakRingFooter, { wide: true }, { flushEffects: true })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  let tree1 = r1.render(e1.__testing.PeakRingFooter, { wide: true })
+  let row1 = findElement(tree1, (el) => el.props && String(el.props.className || '').includes('dshw_footRingVertical'))
+  let horizBtn1 = findElement(tree1, (el) => el.props && String(el.props.className || '').includes('dshw_footRingBtnRechargeInline'))
+  assert.ok(horizBtn1, 'vertical layout with recharge renders inline recharge button')
+
+  // 2. Vertical layout with hidden recharge
+  const r2 = createHookRenderer()
+  const { exports: e2, window: w2 } = loadClientBundle(r2.React, { fetch: mockFetch }, { setInterval: () => 0, clearInterval: () => {} })
+  w2.localStorage.setItem('dshw-peak-orient-v1', 'vertical')
+  w2.localStorage.setItem('dshw-peak-recharge-v1', 'false')
+  r2.render(e2.__testing.PeakRingFooter, { wide: true }, { flushEffects: true })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  let tree2 = r2.render(e2.__testing.PeakRingFooter, { wide: true })
+  let horizBtn2 = findElement(tree2, (el) => el.props && String(el.props.className || '').includes('dshw_footRingBtnRechargeInline'))
+  assert.equal(horizBtn2, null, 'turning off recharge removes the button')
+
+  // 3. Floating mode
+  const r3 = createHookRenderer()
+  const { exports: e3, window: w3 } = loadClientBundle(r3.React, { fetch: mockFetch }, { setInterval: () => 0, clearInterval: () => {} })
+  w3.localStorage.setItem('dshw-peak-dock-v1', 'free')
+  w3.localStorage.setItem('dshw-peak-pos-v1', JSON.stringify({ x: 120, y: 240 }))
+  r3.render(e3.__testing.PeakRingFooter, { wide: true }, { flushEffects: true })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  let tree3 = r3.render(e3.__testing.PeakRingFooter, { wide: true })
+  let floating = findElement(tree3, (el) => el.props && String(el.props.className || '').includes('dshw_footRingFloating'))
+  let resetBtn = findElement(tree3, (el) => el.props && String(el.props.className || '').includes('dshw_footRingResetBtn'))
+  assert.ok(resetBtn, 'floating card provides a reset dock button')
+})
+
+test('dark mode theme compliance: client css avoids un-themed hardcoded white background fallbacks', () => {
+  const source = readProjectFile('lib/client.js')
+  // Ensure no un-themed hardcoded #fff fallbacks in background variables for hero/cards/panels
+  assert.doesNotMatch(source, /--dsw-alias-bg-elevated,#fff/g, 'bg-elevated must not fallback to hardcoded light #fff')
+  assert.doesNotMatch(source, /--dsw-alias-bg-overlay,#fff/g, 'bg-overlay must not fallback to hardcoded light #fff')
+  assert.doesNotMatch(source, /--dsw-alias-label-quaternary,rgba\(31,35,40/g, 'quaternary label must use standard dimmed variable')
+  assert.match(source, /--dsw-alias-bg-layer-1/g, 'standard layer-1 bg variable is used')
+})
+
+test('clicking peak ring footer toggles dedicated control panel with full customization choices', async () => {
+  const renderer = createHookRenderer()
+  const mockFetch = () => Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({
+      ok: true,
+      pricingWindows: {
+        timezone: 'Asia/Shanghai', offsetMinutes: 480,
+        windows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+        offPeakRate: 0.5,
+      },
+      balance: { total: 88.5, currency: 'CNY' },
+      session: { official: { cost: 1.2 } }
+    }),
+  })
+  const { exports, window } = loadClientBundle(renderer.React, { fetch: mockFetch }, { setInterval: () => 0, clearInterval: () => {} })
+  const Ring = exports.__testing.PeakRingFooter
+  renderer.render(Ring, { wide: true }, { flushEffects: true })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  let tree = renderer.render(Ring, { wide: true })
+  let panel = findElement(tree, (el) => el.props && String(el.props.className || '').includes('dshw_peakPanel'))
+  assert.equal(panel, null, 'panel is initially closed')
+
+  // Click the card to open dedicated panel
+  let card = findElement(tree, (el) => el.props && String(el.props.className || '').includes('dshw_footRing'))
+  assert.ok(card && typeof card.props.onClick === 'function', 'card has onClick handler')
+  card.props.onClick({ stopPropagation: () => {} })
+
+  tree = renderer.render(Ring, { wide: true })
+  panel = findElement(tree, (el) => el.props && String(el.props.className || '').includes('dshw_peakPanel'))
+  assert.ok(panel, 'clicking the card opens the dedicated peak control panel')
+  assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板时钟排版'), 'panel exposes orientation selector')
+  assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板时钟卡片比例'), 'panel exposes scale slider')
+  assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板时钟充值按钮'), 'panel exposes recharge toggle')
+  assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板开启峰谷切换提醒'), 'panel exposes notification toggle')
+})
+
+
