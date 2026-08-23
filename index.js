@@ -25,7 +25,7 @@ import { dirname, join } from 'node:path'
 import { PLAN_ADAPTERS, normalizePlanPayload, normalizePlanSnapshotCache, planAdapterById } from './lib/plans.js'
 
 export const name = 'wallet'
-export const inject = ['webServer']
+export const inject = ['webServer', 'credentials']
 
 const OFFICIAL_PROVIDER = 'deepseek-official'
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'

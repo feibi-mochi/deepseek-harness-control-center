@@ -48,6 +48,11 @@ test('plan adapters are pinned to official Z.ai origins and distinct credential 
   assert.equal(planAdapterById('unknown'), null)
 })
 
+test('host plugin declares the credentials seam required by plan adapters', async () => {
+  const mod = await import('../index.js')
+  assert.deepEqual(mod.inject, ['webServer', 'credentials'])
+})
+
 test('Z.ai quota payload normalizes 5-hour tokens and monthly tool usage', () => {
   const atMs = Date.UTC(2026, 7, 23, 12)
   const snapshot = normalizePlanPayload(planAdapterById('zai-cn'), {
