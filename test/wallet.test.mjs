@@ -233,7 +233,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.2.4')
+  assert.equal(pkg.version, '0.2.5')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -1492,7 +1492,10 @@ test('activateAccount: missing accounts and refused credential writes fail safel
   assert.equal((await mod.activateAccount(ctx, 'acc_missing')).ok, false)
   const failed = await mod.activateAccount(ctx, added.account.id)
   assert.equal(failed.ok, false)
-  assert.equal(failed.error, 'shadowed write refused')
+  // The raw provider message may name paths, env vars or key fragments: the
+  // browser must only ever see a bounded enum.
+  assert.equal(failed.error, 'credential-write-refused')
+  assert.doesNotMatch(failed.error, /shadowed write refused/, 'upstream error text must not reach the client')
   // The stored activeId is left untouched on failure.
   assert.equal(mod.activeAccount().id, added.account.id)
 })
@@ -1768,6 +1771,7 @@ test('peak ring clock registers on the sidebar footer slot, not the settings pag
   // The ring once sat inside the settings hero; that placement was wrong and
   // must stay gone.
   assert.doesNotMatch(source, /dshw_peakHero|dshw_peakRingBox|key: 'peakhero'/, 'the settings page must not embed the ring clock')
+  assert.match(source, /ReactDOM\.createPortal/, 'floating card and control panel must escape sidebar clipping through a portal')
   // Design-sheet commitments: warning/success color pair, triangle pointer,
   // zero in-ring text, an independent switch, and reminder dedup storage.
   assert.match(source, /\.dshw_ringOff\{stroke:var\(--dsw-alias-state-success-primary/, 'off-peak arcs use the success color family')
@@ -1986,7 +1990,26 @@ test('dark mode theme compliance: client css avoids un-themed hardcoded white ba
   assert.doesNotMatch(source, /--dsw-alias-bg-elevated,#fff/g, 'bg-elevated must not fallback to hardcoded light #fff')
   assert.doesNotMatch(source, /--dsw-alias-bg-overlay,#fff/g, 'bg-overlay must not fallback to hardcoded light #fff')
   assert.doesNotMatch(source, /--dsw-alias-label-quaternary,rgba\(31,35,40/g, 'quaternary label must use standard dimmed variable')
+  assert.doesNotMatch(source, /#fff(?:fff)?|#1f2328/g, 'client CSS must not carry light-theme-only hardcoded fallbacks')
   assert.match(source, /--dsw-alias-bg-layer-1/g, 'standard layer-1 bg variable is used')
+})
+
+test('floating peak card positions are clamped for saved coordinates, scale changes, and small viewports', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const clamp = exports.__testing.clampPeakPosition
+  assert.equal(typeof clamp, 'function')
+  const bottomRight = clamp({ x: 900, y: 700 }, 240, 100, 1024, 768, 8)
+  assert.equal(bottomRight.x, 776)
+  assert.equal(bottomRight.y, 660)
+  const topLeft = clamp({ x: -100, y: -40 }, 240, 100, 1024, 768, 8)
+  assert.equal(topLeft.x, 8)
+  assert.equal(topLeft.y, 8)
+  // A rendered 120% card wider than the viewport remains reachable at the
+  // safe margin instead of producing a negative max coordinate.
+  const oversized = clamp({ x: 900, y: 700 }, 1400, 900, 1024, 768, 8)
+  assert.equal(oversized.x, 8)
+  assert.equal(oversized.y, 8)
 })
 
 test('clicking peak ring footer toggles dedicated control panel with full customization choices', async () => {
@@ -2024,6 +2047,50 @@ test('clicking peak ring footer toggles dedicated control panel with full custom
   assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板时钟卡片比例'), 'panel exposes scale slider')
   assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板时钟充值按钮'), 'panel exposes recharge toggle')
   assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板开启峰谷切换提醒'), 'panel exposes notification toggle')
+})
+
+test('peak prefs writes suppress their own event echo', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /suppressSelfSyncRef/, 'the ring must guard against re-reading storage from its own dispatch')
+  assert.match(source, /function announcePrefs/, 'preference writes go through one announce helper')
+  assert.match(source, /if \(suppressSelfSyncRef\.current\) return/, 'the change listener skips the self echo')
+  // Every preference writer must use the guarded announce helper rather than
+  // dispatching the shared events inline; the inline form lets this component's
+  // own listener re-read storage and setState again, racing the queued write.
+  const ringBody = source.slice(source.indexOf('function PeakRingFooter'), source.indexOf('function WalletChip'))
+  const ringDispatches = ringBody.match(/compatibility\.dispatch\(PEAK_RING_EVENT\)/g) || []
+  assert.equal(ringDispatches.length, 1, 'the ring event may only be dispatched from inside announcePrefs')
+  for (const fn of ['updateOrient', 'updateScale', 'updateRecharge', 'handleResetDock']) {
+    const start = ringBody.indexOf('function ' + fn)
+    assert.ok(start >= 0, fn + ' must exist')
+    assert.match(ringBody.slice(start, start + 420), /announcePrefs\(/, fn + ' must announce through the guarded helper')
+  }
+})
+
+test('drag latch releases after pointerup so the card stays clickable', () => {
+  const source = readProjectFile('lib/client.js')
+  const ringBody = source.slice(source.indexOf('function PeakRingFooter'), source.indexOf('function WalletChip'))
+  const upStart = ringBody.indexOf('function onUp()')
+  assert.ok(upStart >= 0, 'the drag release handler must exist')
+  const upBody = ringBody.slice(upStart, upStart + 1200)
+  assert.match(upBody, /didDragRef\.current = false/, 'pointerup must clear the drag latch; otherwise a lost pointerup permanently swallows card clicks')
+})
+
+test('storage falls back to memory readably when the native write is refused', () => {
+  const renderer = createHookRenderer()
+  // A native store that accepts reads but refuses every write (private mode /
+  // quota): the adapter must serve the fallback value back, not the stale one.
+  const refusing = {
+    getItem() { return 'stale-native-value' },
+    setItem() { throw new Error('quota exceeded') },
+    removeItem() {},
+  }
+  const { exports } = loadClientBundle(renderer.React, {}, { localStorage: refusing })
+  const adapter = exports.__testing.createCompatibilityAdapter({ localStorage: refusing })
+  adapter.storage.setItem('dshw-peak-dock-v1', 'sidebar')
+  assert.equal(adapter.storage.getItem('dshw-peak-dock-v1'), 'sidebar', 'the refused write must still read back from memory')
+  adapter.storage.removeItem('dshw-peak-dock-v1')
+  assert.equal(adapter.storage.getItem('dshw-peak-dock-v1'), 'stale-native-value', 'after removal the native value is authoritative again')
 })
 
 

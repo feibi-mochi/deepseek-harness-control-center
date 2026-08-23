@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.5 - 2026-08-23
+
+- 修复浮动峰谷卡片在窗口缩放、卡片放大或历史坐标过期后可能跑出视口的问题；加载、缩放、排版切换和 resize 都会重新钳制位置。 / Fixed floating peak cards escaping the viewport after resize, scale changes, or stale saved coordinates; load, scale, layout changes, and resize now re-clamp the position.
+- 恢复 Portal 挂载，确保自由浮动卡片和控制面板脱离侧边栏溢出裁剪。 / Restored Portal mounting so floating cards and the control panel escape sidebar overflow clipping.
+- 完成主题回退清理，移除峰谷控制面板、浮动卡片和开关中的硬编码浅色背景/文字回退。 / Completed theme fallback cleanup for the peak panel, floating card, and switches.
+- 保留账户安全、存储权限、刷新异常和偏好同步加固，并避免原始凭证错误文本进入日志或浏览器。 / Kept account-safety, storage-permission, refresh-failure, and preference-sync hardening without exposing raw credential errors to logs or the browser.
+- 新增浮动坐标边界、Portal 和完整主题回退回归测试；当前测试基线为 78/78。 / Added regression coverage for floating-coordinate bounds, Portal mounting, and complete theme fallbacks; the test baseline is now 78/78.
+
 ## 0.2.4 - 2026-08-22
 
 - 彻底修复暗色模式（Dark Mode）主题适配（Issue #26）：移除所有未主题化的浅色硬编码回退（`--dsw-alias-bg-elevated,#fff`、`--dsw-alias-bg-overlay,#fff` 等），全站统一使用 DSH 原生主题变量（`--dsw-alias-bg-layer-*` 与 `--dsw-alias-label-dimmed`），在深色模式下完美融入背景。 / Fully fixed Dark Mode theme compliance (Issue #26): replaced unthemed hardcoded light fallbacks with DSH native theme variables (`--dsw-alias-bg-layer-*`), rendering dark themes seamlessly without blinding white boxes.
