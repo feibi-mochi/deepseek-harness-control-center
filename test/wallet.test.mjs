@@ -2916,6 +2916,7 @@ test('composer wallet follows the selected provider instead of showing DeepSeek 
   assert.match(source, /'MCP ' \+ planToolPercent/, 'the Z.ai chip shows monthly tool quota')
   assert.match(source, /showDeepSeek \? React\.createElement\('button'/, 'recharge is gated by the selected provider')
   assert.match(source, /modelDirectories\.directoryFor\(sessionId\)/, 'the chip reads the host model-selection service')
+  assert.match(source, /lowNoticeRef\.current\.close\(\)/, 'leaving DeepSeek closes a stale low-balance notice')
 
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-model-selection'))
