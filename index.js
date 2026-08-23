@@ -7,6 +7,7 @@
  *  - a global DeepSeek account balance cache (official Get User Balance
  *    endpoint, refreshed every 60s);
  *  - a global low-balance threshold, persisted under DSH_HOME storages;
+ *  - a local 365-day usage ledger with stable-identity deduplication and locked historical cost;
  *  - multi-account management (accounts.json): list / add / remove accounts and
  *    hot-switch the active one. Activating an account writes its key into the
  *    credentials seam via `credentials.set('DEEPSEEK_API_KEY', ...)`, and the
@@ -27,13 +28,14 @@ export const inject = ['webServer']
 
 const OFFICIAL_PROVIDER = 'deepseek-official'
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
-const PLUGIN_VERSION = '0.3.1'
+const PLUGIN_VERSION = '0.3.2'
 const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
 const PRICING_SYNC_INTERVAL_MS = 6 * 60 * 60_000
 const PRICING_SYNC_TIMEOUT_MS = 8_000
 const MIN_HOST_VERSION = '0.1.0-rc.8'
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const STORE_PATH = join(DSH_HOME, 'storages', 'wallet.json')
+const STORE_BACKUP_PATH = STORE_PATH + '.bak'
 const ACCOUNTS_PATH = join(DSH_HOME, 'storages', 'accounts.json')
 const ACCOUNTS_KEY_PATH = ACCOUNTS_PATH + '.key'
 const ACCOUNTS_BACKUP_PATH = ACCOUNTS_PATH + '.bak'
@@ -42,7 +44,12 @@ const ACCOUNTS_CRYPTO_VERSION = 1
 const CREDENTIAL_REF = 'DEEPSEEK_API_KEY'
 const DEFAULT_THRESHOLD = 5
 const BALANCE_REFRESH_MS = 60_000
-const STORE_VERSION = 2
+const STORE_VERSION = 3
+const HISTORY_VERSION = 1
+const HISTORY_RETENTION_DAYS = 365
+const HISTORY_MAX_EVENTS = 20_000
+const HISTORY_TIMEZONE = 'Asia/Shanghai'
+const DAY_MS = 86_400_000
 
 // Beijing (UTC+8, no DST) weekday peak windows: 09:00-12:00 and 14:00-18:00.
 // From 2026-08-23 00:00 Beijing, Saturday and Sunday are off-peak all day.
@@ -60,6 +67,44 @@ function isBeijingWeekend(atMs) {
   const beijingDate = new Date(atMs + BEIJING_OFFSET_MS)
   const day = beijingDate.getUTCDay()
   return day === 0 || day === 6
+}
+
+function padDayPart(value) {
+  return String(value).padStart(2, '0')
+}
+
+/** Return the local calendar date used by the official pricing timezone. */
+export function historyDayKey(atMs) {
+  if (!Number.isFinite(atMs)) return null
+  const date = new Date(atMs + BEIJING_OFFSET_MS)
+  if (!Number.isFinite(date.getTime())) return null
+  return date.getUTCFullYear() + '-' + padDayPart(date.getUTCMonth() + 1) + '-' + padDayPart(date.getUTCDate())
+}
+
+function historyDayStartMs(day) {
+  if (typeof day !== 'string') return null
+  const match = day.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (match === null) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const date = Number(match[3])
+  const utc = Date.UTC(year, month - 1, date)
+  if (!Number.isFinite(utc)) return null
+  const normalized = new Date(utc)
+  if (normalized.getUTCFullYear() !== year || normalized.getUTCMonth() !== month - 1 || normalized.getUTCDate() !== date) return null
+  return utc - BEIJING_OFFSET_MS
+}
+
+function shiftHistoryDay(day, amount) {
+  const start = historyDayStartMs(day)
+  if (start === null || !Number.isInteger(amount)) return null
+  return historyDayKey(start + amount * DAY_MS)
+}
+
+function historyWindow(atMs = Date.now(), days = HISTORY_RETENTION_DAYS) {
+  const end = historyDayKey(atMs) || historyDayKey(Date.now())
+  const count = Math.min(HISTORY_RETENTION_DAYS, Math.max(1, Number.isInteger(days) ? days : HISTORY_RETENTION_DAYS))
+  return { from: shiftHistoryDay(end, -(count - 1)), to: end, days: count }
 }
 
 export function isBeijingPeak(atMs) {
@@ -181,6 +226,15 @@ export function parseOfficialPricingHtml(html) {
   const cacheHit = findPair('缓存命中')
   const input = findPair('缓存未命中')
   const output = findPair('百万tokens输出')
+  for (const pair of [cacheHit, input, output]) {
+    for (let index = 0; index < models.length; index += 1) {
+      const offPeak = pair.offPeak[index]
+      const peak = pair.peak[index]
+      if (!(offPeak > 0 && peak > 0 && peak >= offPeak) || Math.abs(peak - offPeak * 2) > 1e-9) {
+        throw new Error('official pricing relationship changed')
+      }
+    }
+  }
   const modelsWithRates = {}
   for (const model of requiredModels) {
     const index = models.indexOf(model)
@@ -197,6 +251,11 @@ export function parseOfficialPricingHtml(html) {
     { startHour: Number(windowMatch[1]), endHour: Number(windowMatch[2]) },
     { startHour: Number(windowMatch[3]), endHour: Number(windowMatch[4]) },
   ]
+  if (parsedWindows.some((window) => !Number.isInteger(window.startHour) || !Number.isInteger(window.endHour)
+    || window.startHour < 0 || window.endHour > 24 || window.startHour >= window.endHour)
+    || parsedWindows[0].endHour > parsedWindows[1].startHour) {
+    throw new Error('official peak window is invalid')
+  }
   const weekdayOnly = /高峰时段为北京时间周一至周五/.test(text)
   const weekendMatch = text.match(/北京时间\s*(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日[^。]*?00:00起[^。]*?周末[^。]*?低谷/)
   if (!weekdayOnly && weekendMatch === null) throw new Error('official weekend rule changed')
@@ -217,7 +276,12 @@ function applyOfficialPricing(parsed, response) {
   activePricePolicies = PRICE_POLICIES.map((policy) => {
     const models = {}
     for (const model of Object.keys(policy.models)) {
-      models[model] = parsed.models[model] || policy.models[model]
+      // The live page describes the current peak/off-peak table. Historical
+      // flat-rate policies must remain immutable or old migrations would receive
+      // array rates and could produce NaN costs after a successful sync.
+      models[model] = policy.peakOffPeak === true && parsed.models[model]
+        ? parsed.models[model]
+        : policy.models[model]
     }
     return { ...policy, models }
   })
@@ -355,6 +419,7 @@ export function healthSnapshot() {
     host: hostHealthSnapshot(),
     pricing: pricingSnapshot(),
     accounts: accountStorageSnapshot(),
+    usage: usageStorageSnapshot(),
     runtime: { node: process.version, platform: process.platform },
   }
 }
@@ -390,7 +455,7 @@ function emptyCounters() {
 }
 
 function emptyBucket(priced) {
-  if (priced === true) return { models: {}, cost: 0, priced: true }
+  if (priced === true) return { models: {}, cost: 0, priced: true, unpriced: 0 }
   return { models: {} }
 }
 
@@ -453,9 +518,12 @@ function normalizeCounters(value) {
 function normalizeModels(value) {
   const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
   const models = {}
+  let modelCount = 0
   for (const [model, counters] of Object.entries(source)) {
-    if (model === '__proto__' || model === 'prototype' || model === 'constructor') continue
+    if (boundedString(model, 160) === null || model === '__proto__' || model === 'prototype' || model === 'constructor') continue
     models[model] = normalizeCounters(counters)
+    modelCount += 1
+    if (modelCount >= 500) break
   }
   return models
 }
@@ -464,18 +532,320 @@ function migratedOfficialBucket(value, atMs) {
   const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
   const models = normalizeModels(source.models)
   if (typeof source.cost === 'number' && Number.isFinite(source.cost) && source.cost >= 0 && typeof source.priced === 'boolean') {
-    return { models, cost: source.cost, priced: source.priced }
+    const storedUnpriced = Number.isInteger(source.unpriced) && source.unpriced >= 0 ? source.unpriced : 0
+    const unpriced = source.priced === false ? Math.max(1, storedUnpriced) : storedUnpriced
+    return { models, cost: source.cost, priced: unpriced === 0, unpriced }
   }
   let cost = 0
-  let priced = true
+  let unpriced = 0
   for (const [model, counters] of Object.entries(models)) {
     const valueAtMigration = costOf(model, counters, atMs)
-    if (valueAtMigration === null) priced = false
+    if (valueAtMigration === null) unpriced = 1
     else cost += valueAtMigration
   }
-  return { models, cost, priced }
+  return { models, cost, priced: unpriced === 0, unpriced }
 }
 
+const HISTORY_KEY_RE = /^[a-f0-9]{64}$/
+
+function emptyHistory() {
+  return { version: HISTORY_VERSION, timezone: HISTORY_TIMEZONE, retentionDays: HISTORY_RETENTION_DAYS, events: {} }
+}
+
+function historyUsageCounters(value) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  return normalizeCounters({
+    input: source.input ?? source.inputTokens,
+    output: source.output ?? source.outputTokens,
+    cacheRead: source.cacheRead ?? source.cacheReadTokens,
+    cacheWrite: source.cacheWrite ?? source.cacheWriteTokens,
+    reasoning: source.reasoning ?? source.reasoningTokens,
+  })
+}
+
+function boundedString(value, max = 120) {
+  return typeof value === 'string' && value !== '' && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value) ? value : null
+}
+
+function finiteInteger(value) {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    const parsed = Number(value)
+    return Number.isSafeInteger(parsed) ? parsed : null
+  }
+  return null
+}
+
+function historyIdentity(options, usage, sessionId, provider, model) {
+  const request = options !== null && typeof options === 'object' ? options : {}
+  const report = usage !== null && typeof usage === 'object' ? usage : {}
+  const meta = request.meta !== null && typeof request.meta === 'object' ? request.meta : {}
+  const turn = finiteInteger(request.turn ?? meta.turn ?? report.turn)
+  const step = finiteInteger(request.step ?? meta.step ?? report.step)
+  const purpose = boundedString(request.purpose, 40) || ''
+  if (turn !== null && step !== null) {
+    return { kind: 'turn-step', turn, step, raw: 'turn-step|' + sessionId + '|' + provider + '|' + model + '|' + turn + '|' + step + '|' + purpose }
+  }
+  const requestId = boundedString(request.usageId ?? request.requestId ?? request.id ?? report.usageId ?? report.requestId, 160)
+  if (requestId !== null) return { kind: 'request-id', requestId, raw: 'request-id|' + sessionId + '|' + provider + '|' + model + '|' + requestId }
+  return { kind: 'generated', raw: 'generated|' + randomUUID() }
+}
+
+function historyEventId(identity) {
+  return createHash('sha256').update(identity.raw).digest('hex')
+}
+
+function normalizeHistoryEvent(value, eventId, nowMs = Date.now()) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const occurredAt = typeof source.occurredAt === 'number' && Number.isFinite(source.occurredAt)
+    ? source.occurredAt
+    : typeof source.atMs === 'number' && Number.isFinite(source.atMs) ? source.atMs : NaN
+  const day = historyDayKey(occurredAt)
+  const sessionId = boundedString(source.sessionId, 160)
+  const provider = boundedString(source.provider, 100)
+  const model = boundedString(source.model, 160)
+  if (day === null || sessionId === null || provider === null || model === null) return null
+  const usage = historyUsageCounters(source.usage ?? source.counters)
+  const official = source.official === true
+  const rawCost = Number(source.cost)
+  const cost = official && source.priced === true && Number.isFinite(rawCost) && rawCost >= 0 ? rawCost : null
+  const identity = source.identity !== null && typeof source.identity === 'object' ? source.identity : null
+  return {
+    occurredAt,
+    day,
+    sessionId,
+    provider,
+    model,
+    official,
+    usage,
+    cost,
+    priced: official && cost !== null,
+    identity: identity && (identity.kind === 'turn-step' || identity.kind === 'request-id')
+      ? { kind: identity.kind, turn: finiteInteger(identity.turn), step: finiteInteger(identity.step), requestId: boundedString(identity.requestId, 160) }
+      : null,
+    schema: HISTORY_VERSION,
+    observedAt: Number.isFinite(nowMs) ? nowMs : Date.now(),
+    eventId: HISTORY_KEY_RE.test(eventId) ? eventId : createHash('sha256').update(JSON.stringify({ occurredAt, sessionId, provider, model, usage })).digest('hex'),
+  }
+}
+
+export function normalizeHistory(value, atMs = Date.now()) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const rawEvents = source.events !== null && typeof source.events === 'object' && !Array.isArray(source.events) ? source.events : {}
+  const window = historyWindow(atMs)
+  const byId = new Map()
+  for (const [rawId, rawEvent] of Object.entries(rawEvents)) {
+    const event = normalizeHistoryEvent(rawEvent, rawId, atMs)
+    if (event === null || event.day < window.from || event.day > window.to) continue
+    const id = event.eventId
+    const previous = byId.get(id)
+    if (previous === undefined || event.occurredAt >= previous.occurredAt) byId.set(id, event)
+  }
+  const events = {}
+  const sorted = [...byId.entries()].sort((left, right) => right[1].occurredAt - left[1].occurredAt).slice(0, HISTORY_MAX_EVENTS)
+  for (const [id, event] of sorted.reverse()) events[id] = event
+  return { version: HISTORY_VERSION, timezone: HISTORY_TIMEZONE, retentionDays: HISTORY_RETENTION_DAYS, events }
+}
+
+function createHistoryEvent(options, usage, atMs, officialProviders) {
+  const request = options !== null && typeof options === 'object' ? options : {}
+  const sessionId = boundedString(request.sessionId, 160)
+  const provider = boundedString(request.provider, 100)
+  const model = boundedString(request.model ?? request.modelName, 160)
+  const day = historyDayKey(atMs)
+  if (sessionId === null || provider === null || model === null || day === null) return null
+  const identity = historyIdentity(request, usage, sessionId, provider, model)
+  const official = isOfficialProvider(provider, officialProviders)
+  const counters = historyUsageCounters(usage)
+  const cost = official ? costOf(model, counters, atMs) : null
+  return {
+    occurredAt: atMs,
+    day,
+    sessionId,
+    provider,
+    model,
+    official,
+    usage: counters,
+    cost: official && cost !== null ? cost : null,
+    priced: official && cost !== null,
+    identity: identity.kind === 'generated'
+      ? null
+      : { kind: identity.kind, turn: identity.turn, step: identity.step, requestId: identity.requestId },
+    schema: HISTORY_VERSION,
+    observedAt: Date.now(),
+    eventId: historyEventId(identity),
+  }
+}
+
+function subtractUsage(counters, usage) {
+  for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning']) {
+    counters[key] = Math.max(0, finiteCounter(counters[key]) - finiteCounter(usage[key]))
+  }
+}
+
+function removeSessionContribution(event) {
+  const session = store.sessions[event.sessionId]
+  if (session === null || typeof session !== 'object') return
+  const bucket = event.official ? session.official : session.third
+  if (bucket === null || typeof bucket !== 'object' || bucket.models === null || typeof bucket.models !== 'object') return
+  const modelCounters = bucket.models[event.model]
+  if (modelCounters !== null && typeof modelCounters === 'object') {
+    subtractUsage(modelCounters, event.usage)
+    if (Object.values(modelCounters).every((value) => finiteCounter(value) === 0)) delete bucket.models[event.model]
+  }
+  if (event.official) {
+    if (event.priced === true && typeof bucket.cost === 'number') {
+      bucket.cost = Math.max(0, bucket.cost - (event.cost || 0))
+    } else {
+      const currentUnpriced = Number.isInteger(bucket.unpriced) && bucket.unpriced >= 0
+        ? bucket.unpriced
+        : bucket.priced === false ? 1 : 0
+      bucket.unpriced = Math.max(0, currentUnpriced - 1)
+      bucket.priced = bucket.unpriced === 0
+    }
+  }
+}
+
+let historyPrunedDay = null
+let historyEventCount = 0
+
+function recordHistoryEvent(event) {
+  if (event === null) return
+  if (store.history === null || typeof store.history !== 'object' || store.history.events === null || typeof store.history.events !== 'object' || Array.isArray(store.history.events)) {
+    store.history = emptyHistory()
+    historyEventCount = 0
+  }
+  if (!Object.hasOwn(store.history.events, event.eventId)) historyEventCount += 1
+  store.history.events[event.eventId] = event
+  const currentDay = historyDayKey(Date.now())
+  const pruneDay = historyPrunedDay !== null && currentDay !== null && currentDay < historyPrunedDay ? historyPrunedDay : currentDay
+  if (historyPrunedDay !== pruneDay || historyEventCount > HISTORY_MAX_EVENTS) {
+    const pruneAt = pruneDay === currentDay ? Date.now() : (historyDayStartMs(pruneDay) ?? Date.now()) + 12 * 3_600_000
+    store.history = normalizeHistory(store.history, pruneAt)
+    historyEventCount = Object.keys(store.history.events).length
+    historyPrunedDay = pruneDay
+  }
+}
+
+function historyTokenTotal(counters) {
+  if (counters === null || typeof counters !== 'object') return 0
+  return finiteCounter(counters.input) + finiteCounter(counters.output) + finiteCounter(counters.cacheRead) + finiteCounter(counters.cacheWrite)
+}
+
+function emptyHistoryAggregate() {
+  return { tokens: emptyCounters(), calls: 0, cost: 0, priced: true }
+}
+
+function addHistoryAggregate(target, event) {
+  addUsage(target.tokens, event.usage)
+  target.calls += 1
+  if (event.official) {
+    if (event.priced && event.cost !== null) target.cost += event.cost
+    else target.priced = false
+  }
+}
+
+function publicHistoryAggregate(aggregate, hasOfficial = true) {
+  const hasCalls = aggregate.calls > 0
+  return {
+    tokens: aggregate.tokens,
+    totalTokens: historyTokenTotal(aggregate.tokens),
+    calls: aggregate.calls,
+    cost: hasOfficial && hasCalls && aggregate.priced ? aggregate.cost : null,
+    priced: hasOfficial && hasCalls && aggregate.priced,
+  }
+}
+
+function historyAggregate(events) {
+  const official = emptyHistoryAggregate()
+  const third = emptyHistoryAggregate()
+  const models = new Map()
+  let cacheInput = 0
+  let cacheRead = 0
+  for (const event of events) {
+    const target = event.official ? official : third
+    addHistoryAggregate(target, event)
+    cacheInput += finiteCounter(event.usage.input)
+    cacheRead += finiteCounter(event.usage.cacheRead)
+    const key = event.provider + '\u0000' + event.model
+    let model = models.get(key)
+    if (model === undefined) {
+      model = { provider: event.provider, model: event.model, official: event.official, ...emptyHistoryAggregate() }
+      models.set(key, model)
+    }
+    addHistoryAggregate(model, event)
+  }
+  const total = emptyHistoryAggregate()
+  for (const source of [official, third]) {
+    for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning']) total.tokens[key] += source.tokens[key]
+    total.calls += source.calls
+  }
+  total.cost = official.cost
+  total.priced = official.priced
+  return {
+    official: publicHistoryAggregate(official, true),
+    third: publicHistoryAggregate(third, false),
+    total: publicHistoryAggregate(total, official.calls > 0),
+    cacheHitRate: cacheInput + cacheRead > 0 ? Math.round(cacheRead / (cacheInput + cacheRead) * 1000) / 10 : null,
+    models: [...models.values()].map((model) => ({
+      provider: model.provider,
+      model: model.model,
+      official: model.official,
+      ...publicHistoryAggregate(model, model.official),
+    })),
+  }
+}
+
+export function historyView({ days = HISTORY_RETENTION_DAYS, date = null, sessionId = null, atMs = Date.now() } = {}) {
+  const window = historyWindow(atMs, days)
+  const sourceEvents = store.history && store.history.events ? Object.values(store.history.events) : []
+  const filtered = sourceEvents.filter((event) => event.day >= window.from && event.day <= window.to && (sessionId === null || event.sessionId === sessionId))
+  const byDay = new Map()
+  for (const event of filtered) {
+    if (!byDay.has(event.day)) byDay.set(event.day, [])
+    byDay.get(event.day).push(event)
+  }
+  const daysOut = []
+  for (let index = 0; index < window.days; index += 1) {
+    const day = shiftHistoryDay(window.from, index)
+    const events = byDay.get(day) || []
+    const aggregate = historyAggregate(events)
+    const dayStart = historyDayStartMs(day)
+    daysOut.push({
+      date: day,
+      weekday: dayStart === null ? null : new Date(dayStart + BEIJING_OFFSET_MS).getUTCDay(),
+      ...aggregate.total,
+      official: aggregate.official,
+      third: aggregate.third,
+      cacheHitRate: aggregate.cacheHitRate,
+    })
+  }
+  const total = historyAggregate(filtered)
+  const todayEvents = byDay.get(window.to) || []
+  const monthPrefix = window.to.slice(0, 7)
+  const monthEvents = filtered.filter((event) => event.day.startsWith(monthPrefix))
+  const selectedEvents = typeof date === 'string' ? (byDay.get(date) || []) : []
+  const selectedAggregate = typeof date === 'string' && date >= window.from && date <= window.to ? historyAggregate(selectedEvents) : null
+  return {
+    ok: true,
+    timezone: HISTORY_TIMEZONE,
+    retentionDays: HISTORY_RETENTION_DAYS,
+    storage: usageStorageSnapshot(),
+    window,
+    summary: {
+      total: total.total,
+      today: historyAggregate(todayEvents).total,
+      month: historyAggregate(monthEvents).total,
+      cacheHitRate: total.cacheHitRate,
+    },
+    days: daysOut,
+    selected: selectedAggregate === null ? null : {
+      date,
+      ...selectedAggregate,
+      breakdown: selectedAggregate.models,
+    },
+  }
+}
 // Provider-route aliasing: wrapper plugins (e.g. vision proxies) sit in front
 // of the official API under their own provider id, so the bucket check must be
 // a configured set rather than one hard-coded name.
@@ -503,13 +873,16 @@ export function normalizeStoreData(value, atMs = Date.now()) {
     ? source.sessions
     : {}
   const sessions = {}
+  let sessionCount = 0
   for (const [sessionId, value] of Object.entries(rawSessions)) {
-    if (sessionId === '__proto__' || sessionId === 'prototype' || sessionId === 'constructor') continue
+    if (boundedString(sessionId, 160) === null || sessionId === '__proto__' || sessionId === 'prototype' || sessionId === 'constructor') continue
     const rawSession = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
     sessions[sessionId] = {
       official: migratedOfficialBucket(rawSession.official, atMs),
       third: { models: normalizeModels(rawSession.third && rawSession.third.models) },
     }
+    sessionCount += 1
+    if (sessionCount >= 5_000) break
   }
   const normalized = {
     version: STORE_VERSION,
@@ -519,45 +892,106 @@ export function normalizeStoreData(value, atMs = Date.now()) {
     officialProviders: normalizeProviderList(source.officialProviders),
     knownProviders: normalizeProviderList(source.knownProviders),
   }
+  if (Object.hasOwn(source, 'history')) normalized.history = normalizeHistory(source.history, atMs)
   return { store: normalized, migrated: JSON.stringify(source) !== JSON.stringify(normalized) }
 }
 
+let usageStorageStatus = 'ready'
+let usageStorageError = null
+let usageStorageLocked = false
+let usageStorageRecovered = false
+let usageStoreSkipBackupOnce = false
+
+function emptyStoreData() {
+  return { version: STORE_VERSION, thresholds: { CNY: DEFAULT_THRESHOLD }, accountThresholds: {}, sessions: {}, officialProviders: [], knownProviders: [], history: emptyHistory() }
+}
+
+function readStoreFile(path) {
+  const result = normalizeStoreData(JSON.parse(readFileSync(path, 'utf8')))
+  result.store.history = normalizeHistory(result.store.history)
+  return result
+}
+
 function loadStore() {
+  const primaryExists = existsSync(STORE_PATH)
+  const backupExists = existsSync(STORE_BACKUP_PATH)
   try {
-    return normalizeStoreData(JSON.parse(readFileSync(STORE_PATH, 'utf8')))
+    return { ...readStoreFile(STORE_PATH), recovered: false }
   } catch {
-    return {
-      store: { version: STORE_VERSION, thresholds: { CNY: DEFAULT_THRESHOLD }, accountThresholds: {}, sessions: {}, officialProviders: [], knownProviders: [] },
-      migrated: false,
+    try {
+      const recovered = readStoreFile(STORE_BACKUP_PATH)
+      usageStorageStatus = 'recovered'
+      usageStorageRecovered = true
+      usageStoreSkipBackupOnce = true
+      return { ...recovered, migrated: true, recovered: true }
+    } catch {
+      if (primaryExists || backupExists) {
+        usageStorageStatus = 'locked'
+        usageStorageError = 'usage-store-unreadable'
+        usageStorageLocked = true
+      }
+      return { store: emptyStoreData(), migrated: false, recovered: false }
     }
+  }
+}
+
+export function usageStorageSnapshot() {
+  return {
+    status: usageStorageStatus,
+    error: usageStorageError,
+    locked: usageStorageLocked,
+    recovered: usageStorageRecovered,
+    backup: existsSync(STORE_BACKUP_PATH),
+    retentionDays: HISTORY_RETENTION_DAYS,
   }
 }
 
 let saveTimer = null
 const loadedStore = loadStore()
 let store = loadedStore.store
-let storeNeedsSave = loadedStore.migrated
+let storeNeedsSave = loadedStore.migrated || loadedStore.recovered
+historyPrunedDay = historyDayKey(Date.now())
+historyEventCount = store.history && store.history.events ? Object.keys(store.history.events).length : 0
 
 function persistStore(logger) {
   if (saveTimer !== null) {
     clearTimeout(saveTimer)
     saveTimer = null
   }
+  if (usageStorageLocked) {
+    if (logger && typeof logger.warn === 'function') logger.warn('dsh-wallet: usage store is locked; refusing to overwrite unreadable data')
+    return
+  }
   try {
     mkdirSync(dirname(STORE_PATH), { recursive: true, mode: 0o700 })
     const tmp = STORE_PATH + '.tmp'
     // Owner-only: the store carries usage accounting next to credential files.
     writeFileSync(tmp, JSON.stringify(store), { mode: 0o600 })
+    chmodSync(tmp, 0o600)
+    if (existsSync(STORE_PATH) && !usageStoreSkipBackupOnce) {
+      copyFileSync(STORE_PATH, STORE_BACKUP_PATH)
+      chmodSync(STORE_BACKUP_PATH, 0o600)
+    }
     renameSync(tmp, STORE_PATH)
+    chmodSync(STORE_PATH, 0o600)
+    if (!existsSync(STORE_BACKUP_PATH)) {
+      copyFileSync(STORE_PATH, STORE_BACKUP_PATH)
+      chmodSync(STORE_BACKUP_PATH, 0o600)
+    }
+    usageStoreSkipBackupOnce = false
+    usageStorageError = null
+    usageStorageStatus = usageStorageRecovered ? 'recovered' : 'ready'
   } catch (error) {
+    usageStorageStatus = 'error'
+    usageStorageError = 'usage-store-persist-failed'
     if (logger && typeof logger.warn === 'function') {
-      logger.warn('dsh-wallet: failed to persist store: ' + String(error))
+      logger.warn('dsh-wallet: failed to persist usage store')
     }
   }
 }
 
 function scheduleSave(logger) {
-  if (saveTimer !== null) return
+  if (usageStorageLocked || saveTimer !== null) return
   saveTimer = setTimeout(() => persistStore(logger), 500)
 }
 
@@ -589,6 +1023,7 @@ let accountStorageScheme = process.platform === 'win32' ? 'windows-dpapi' : 'aes
 let accountStorageError = null
 let accountStorageLocked = false
 let accountStorageRecovered = false
+let accountStoreSkipBackupOnce = false
 
 function runWindowsDpapi(operation, value) {
   if (process.platform !== 'win32') return null
@@ -634,6 +1069,7 @@ function getFallbackEncryptionKey(createIfMissing = true) {
     return fallbackEncryptionKey
   } catch {
     accountStorageError = 'account-encryption-key-unavailable'
+    accountStorageLocked = true
     return null
   }
 }
@@ -659,7 +1095,7 @@ function decryptApiKeyAes(value, key) {
   return Buffer.concat([decipher.update(Buffer.from(value.payload, 'base64')), decipher.final()]).toString('utf8')
 }
 
-export const __testing = { encryptApiKeyAes, decryptApiKeyAes, compareVersions }
+export const __testing = { encryptApiKeyAes, decryptApiKeyAes, compareVersions, applyOfficialPricing }
 
 function protectApiKey(apiKey) {
   const dpapi = runWindowsDpapi('protect', apiKey)
@@ -698,6 +1134,7 @@ function unprotectApiKey(value) {
       accountStorageLocked = true
     }
     else {
+      accountStorageScheme = 'windows-dpapi'
       try { return Buffer.from(decoded, 'base64').toString('utf8') } catch { /* fall through */ }
       accountStorageError = 'account-decryption-failed'
       accountStorageLocked = true
@@ -709,6 +1146,7 @@ function unprotectApiKey(value) {
     accountStorageLocked = true
     return ''
   }
+  accountStorageScheme = 'aes-gcm-file-key'
   const key = getFallbackEncryptionKey(false)
   if (key === null) return ''
   try {
@@ -740,18 +1178,19 @@ export function normalizeAccountsData(value) {
   const accounts = []
   for (const raw of rawAccounts) {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue
-    const id = typeof raw.id === 'string' && raw.id !== '' ? raw.id : null
+    const id = boundedString(raw.id, 100)
     const name = typeof raw.name === 'string' ? raw.name.trim() : ''
     // Accept the v1 plaintext shape once so an existing installation can be
     // migrated on its next save; new writes use apiKeyEncrypted only.
     const apiKey = typeof raw.apiKey === 'string' ? raw.apiKey : unprotectApiKey(raw.apiKeyEncrypted)
-    if (id === null || name === '' || apiKey === '') continue
+    if (id === null || name === '' || name.length > 80 || /[\u0000-\u001f\u007f]/.test(name) || validateApiKey(apiKey) !== null) continue
     accounts.push({
       id,
       name,
       apiKey,
-      createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
+      createdAt: Number.isFinite(raw.createdAt) && raw.createdAt >= 0 ? raw.createdAt : Date.now(),
     })
+    if (accounts.length >= 50) break
   }
   const activeId =
     typeof source.activeId === 'string' && accounts.some((account) => account.id === source.activeId)
@@ -761,33 +1200,35 @@ export function normalizeAccountsData(value) {
 }
 
 function readAccountsFile(path) {
+  accountStorageError = null
+  accountStorageLocked = false
   const raw = JSON.parse(readFileSync(path, 'utf8'))
   const normalized = normalizeAccountsData(raw)
+  if (accountStorageLocked) throw new Error('account file contains an unreadable encrypted record')
   const legacyPlaintext = Array.isArray(raw?.accounts)
     && raw.accounts.some((account) => account && typeof account.apiKey === 'string')
   return { accounts: normalized, migrated: legacyPlaintext || raw?.version !== ACCOUNTS_VERSION }
 }
 
 function loadAccounts() {
-  if (!existsSync(ACCOUNTS_PATH)) {
-    if (!existsSync(ACCOUNTS_BACKUP_PATH)) return { accounts: emptyAccounts(), migrated: false }
+  const primaryExists = existsSync(ACCOUNTS_PATH)
+  const backupExists = existsSync(ACCOUNTS_BACKUP_PATH)
+  try {
+    return readAccountsFile(ACCOUNTS_PATH)
+  } catch {
     try {
       const recovered = readAccountsFile(ACCOUNTS_BACKUP_PATH)
       accountStorageRecovered = true
       accountStorageError = 'account-store-restored-from-backup'
+      accountStoreSkipBackupOnce = true
       return { accounts: recovered.accounts, migrated: true }
     } catch {
-      accountStorageError = 'account-backup-invalid'
-      accountStorageLocked = true
+      if (primaryExists || backupExists) {
+        accountStorageError = backupExists ? 'account-primary-and-backup-invalid' : 'account-store-invalid'
+        accountStorageLocked = true
+      }
       return { accounts: emptyAccounts(), migrated: false }
     }
-  }
-  try {
-    return readAccountsFile(ACCOUNTS_PATH)
-  } catch {
-    accountStorageError = 'account-store-invalid'
-    accountStorageLocked = true
-    return { accounts: emptyAccounts(), migrated: false }
   }
 }
 
@@ -817,16 +1258,23 @@ function persistAccounts(logger) {
     })
     writeFileSync(tmp, JSON.stringify({ version: ACCOUNTS_VERSION, accounts: encryptedAccounts, activeId: accounts.activeId }), { mode: 0o600 })
     chmodSync(tmp, 0o600)
-    if (existsSync(ACCOUNTS_PATH)) {
+    if (existsSync(ACCOUNTS_PATH) && !accountStoreSkipBackupOnce) {
       copyFileSync(ACCOUNTS_PATH, ACCOUNTS_BACKUP_PATH)
       chmodSync(ACCOUNTS_BACKUP_PATH, 0o600)
     }
     renameSync(tmp, ACCOUNTS_PATH)
+    chmodSync(ACCOUNTS_PATH, 0o600)
+    if (!existsSync(ACCOUNTS_BACKUP_PATH)) {
+      copyFileSync(ACCOUNTS_PATH, ACCOUNTS_BACKUP_PATH)
+      chmodSync(ACCOUNTS_BACKUP_PATH, 0o600)
+    }
+    accountStoreSkipBackupOnce = false
     accountsNeedsSave = false
     accountStorageRecovered = false
     accountStorageError = null
   } catch (error) {
     accountStorageError = accountStorageError || 'account-encryption-failed'
+    accountStorageLocked = true
     if (logger && typeof logger.warn === 'function') {
       logger.warn('dsh-wallet: failed to persist encrypted accounts')
     }
@@ -834,7 +1282,7 @@ function persistAccounts(logger) {
 }
 
 function scheduleAccountsSave(logger) {
-  if (accountsSaveTimer !== null) return
+  if (accountStorageLocked || accountsSaveTimer !== null) return
   accountsSaveTimer = setTimeout(() => persistAccounts(logger), 500)
 }
 
@@ -858,12 +1306,16 @@ export function validateApiKey(key) {
   const trimmed = key.trim()
   if (trimmed === '') return 'API key must not be empty'
   if (trimmed.length < 8) return 'API key looks too short'
+  if (trimmed.length > 512) return 'API key is too long'
   if (/\s/.test(trimmed)) return 'API key must not contain whitespace'
+  if (/[\u0000-\u001f\u007f]/.test(trimmed)) return 'API key must not contain control characters'
   return null
 }
 
 export function addAccount(name, apiKey) {
+  if (accounts.accounts.length >= 50) return { ok: false, error: 'account limit reached' }
   if (typeof name !== 'string' || name.trim() === '') return { ok: false, error: 'Account name must not be empty' }
+  if (name.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(name.trim())) return { ok: false, error: 'Account name is invalid' }
   const keyError = validateApiKey(apiKey)
   if (keyError !== null) return { ok: false, error: keyError }
   const account = {
@@ -956,11 +1408,12 @@ export async function activateAccount(ctx, id) {
 }
 
 function addUsage(counters, usage) {
-  counters.input += finiteCounter(usage.inputTokens)
-  counters.output += finiteCounter(usage.outputTokens)
-  counters.cacheRead += finiteCounter(usage.cacheReadTokens)
-  counters.cacheWrite += finiteCounter(usage.cacheWriteTokens)
-  counters.reasoning += finiteCounter(usage.reasoningTokens)
+  usage = usage !== null && typeof usage === 'object' ? usage : {}
+  counters.input += finiteCounter(usage.inputTokens ?? usage.input)
+  counters.output += finiteCounter(usage.outputTokens ?? usage.output)
+  counters.cacheRead += finiteCounter(usage.cacheReadTokens ?? usage.cacheRead)
+  counters.cacheWrite += finiteCounter(usage.cacheWriteTokens ?? usage.cacheWrite)
+  counters.reasoning += finiteCounter(usage.reasoningTokens ?? usage.reasoning)
 }
 
 function bucketTotals(bucket) {
@@ -978,17 +1431,20 @@ function bucketTotals(bucket) {
 export function addOfficialUsage(bucket, model, usage, atMs) {
   if (!Object.hasOwn(bucket.models, model)) bucket.models[model] = emptyCounters()
   addUsage(bucket.models[model], usage)
+  if (!Number.isInteger(bucket.unpriced) || bucket.unpriced < 0) bucket.unpriced = bucket.priced === false ? 1 : 0
   const cost = costOf(model, usage, atMs)
-  if (cost === null) bucket.priced = false
+  if (cost === null) bucket.unpriced += 1
   else bucket.cost += cost
+  bucket.priced = bucket.unpriced === 0
 }
 
 function recordUsage(options, usage, atMs = Date.now()) {
-  const sessionId = options.sessionId
-  const provider = options.provider
-  const model = options.model ?? options.modelName ?? ''
-  if (typeof sessionId !== 'string' || sessionId === '' || typeof provider !== 'string' || provider === '') return
-  if (typeof model !== 'string' || model === '__proto__' || model === 'prototype' || model === 'constructor') return
+  const request = options !== null && typeof options === 'object' ? options : {}
+  const sessionId = boundedString(request.sessionId, 160)
+  const provider = boundedString(request.provider, 100)
+  const model = boundedString(request.model ?? request.modelName, 160)
+  if (sessionId === null || provider === null || model === null) return
+  if (model === '__proto__' || model === 'prototype' || model === 'constructor') return
   if (sessionId === '__proto__' || sessionId === 'prototype' || sessionId === 'constructor') return
   // Remember every non-builtin route observed by the stream tap. The settings
   // page can then promote wrapper routes into the official billing bucket.
@@ -998,6 +1454,10 @@ function recordUsage(options, usage, atMs = Date.now()) {
   if (!Object.hasOwn(store.sessions, sessionId)) {
     store.sessions[sessionId] = { official: emptyBucket(true), third: emptyBucket(false) }
   }
+  const event = createHistoryEvent(request, usage, atMs, store.officialProviders)
+  const previousEvent = event !== null && store.history && store.history.events ? store.history.events[event.eventId] : undefined
+  if (previousEvent !== undefined) removeSessionContribution(previousEvent)
+
   const session = store.sessions[sessionId]
   const official = isOfficialProvider(provider, store.officialProviders)
   const bucket = official ? session.official : session.third
@@ -1006,6 +1466,7 @@ function recordUsage(options, usage, atMs = Date.now()) {
     if (!Object.hasOwn(bucket.models, model)) bucket.models[model] = emptyCounters()
     addUsage(bucket.models[model], usage)
   }
+  recordHistoryEvent(event)
 }
 
 let balance = { fetchedAt: 0, available: false, balances: [], error: null }
@@ -1167,6 +1628,7 @@ function snapshotView(sessionId) {
       error: balance.available ? null : balance.error,
     },
     session: sessionView(sessionId),
+    usageStorage: usageStorageSnapshot(),
     // Thresholds are per-ACCOUNT first (each account keeps its own line even
     // in the same currency); the per-currency map only serves the
     // no-active-account case and inherits into accounts without one yet.
@@ -1338,6 +1800,7 @@ export function apply(ctx, config) {
       path: '/api/wallet/threshold',
       handler: async (req, res) => {
         if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        if (usageStorageLocked) return json(res, 423, { ok: false, error: 'usage-storage-locked' })
         const body = await readBody(req)
         if (body === null || typeof body.threshold !== 'number' || !Number.isFinite(body.threshold)) {
           return json(res, 400, { ok: false, error: 'threshold must be a number' })
@@ -1370,6 +1833,7 @@ export function apply(ctx, config) {
       path: '/api/wallet/clear-session',
       handler: async (req, res) => {
         if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        if (usageStorageLocked) return json(res, 423, { ok: false, error: 'usage-storage-locked' })
         const body = await readBody(req)
         const sid = body && body.session
         if (typeof sid !== 'string' || !/^session-[A-Za-z0-9-]+$/.test(sid)) {
@@ -1382,6 +1846,41 @@ export function apply(ctx, config) {
         return json(res, 200, { ok: true })
       },
     })
+    const disposeHistory = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/wallet/history',
+      handler: (req, res) => {
+        if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        const raw = req.url || ''
+        const query = raw.indexOf('?') >= 0 ? new URLSearchParams(raw.slice(raw.indexOf('?') + 1)) : new URLSearchParams()
+        const rawDays = query.get('days')
+        if (rawDays !== null && rawDays !== '' && !/^\d+$/.test(rawDays)) return json(res, 400, { ok: false, error: 'days must be an integer between 7 and 365' })
+        const days = rawDays === null || rawDays === '' ? HISTORY_RETENTION_DAYS : Number(rawDays)
+        if (!Number.isInteger(days) || days < 7 || days > HISTORY_RETENTION_DAYS) {
+          return json(res, 400, { ok: false, error: 'days must be an integer between 7 and 365' })
+        }
+        const date = query.get('date')
+        if (date !== null && historyDayStartMs(date) === null) return json(res, 400, { ok: false, error: 'date must be YYYY-MM-DD' })
+        const session = query.get('session')
+        if (session !== null && !/^session-[A-Za-z0-9-]+$/.test(session)) return json(res, 400, { ok: false, error: 'session must be a valid session id' })
+        return json(res, 200, historyView({ days, date, sessionId: session, atMs: Date.now() }))
+      },
+    })
+    const disposeClearHistory = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/wallet/clear-history',
+      handler: async (req, res) => {
+        if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        if (usageStorageLocked) return json(res, 423, { ok: false, error: 'usage-storage-locked' })
+        const previous = store.history && store.history.events ? Object.keys(store.history.events).length : 0
+        store.history = emptyHistory()
+        historyPrunedDay = historyDayKey(Date.now())
+        historyEventCount = 0
+historyEventCount = store.history && store.history.events ? Object.keys(store.history.events).length : 0
+        scheduleSave(ctx.logger)
+        return json(res, 200, { ok: true, removed: previous })
+      },
+    })
     // -- multi-account routes -------------------------------------------------
     // Configure which wrapper provider routes (vision proxies and the like)
     // bill into the official bucket. Issue #21.
@@ -1390,6 +1889,7 @@ export function apply(ctx, config) {
       path: '/api/wallet/official-providers',
       handler: async (req, res) => {
         if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        if (usageStorageLocked) return json(res, 423, { ok: false, error: 'usage-storage-locked' })
         const body = await readBody(req)
         if (body === null || !Array.isArray(body.providers)) return json(res, 400, { ok: false, error: 'providers array is required' })
         store.officialProviders = normalizeProviderList(body.providers)
@@ -1481,6 +1981,8 @@ export function apply(ctx, config) {
       disposeThreshold()
       disposeRefresh()
       disposeClear()
+      disposeHistory()
+      disposeClearHistory()
       disposeAccounts()
       disposeProviders()
       disposeActivate()

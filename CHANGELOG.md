@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.2 - 2026-08-23
+
+- 新增 365 天本地 Token 用量账本与折叠式热力图：按日期、会话、模型和官方/第三方 provider 展示调用次数、Token、缓存命中率与可定价费用。 / Added a 365-day local Token ledger and collapsible heatmap grouped by date, session, model, and official/third-party provider.
+- 稳定的 `(turn, step)` 或请求标识会去重，后到的最终样本替换先前样本；费用在用量发生时锁定，未知价格只保留 Token。 / Stable `(turn, step)` or request identities are deduplicated, later final samples replace earlier ones, and cost is locked at usage time while unknown prices retain tokens only.
+- 历史账本与当前会话清除分开，历史数据只写入本机钱包存储，不保存提示词、工具参数或回答正文；支持独立清除全部历史账本。 / History clearing is separate from current-session clearing; the local store keeps no prompts, tool arguments, or response bodies and exposes an independent clear-history action.
+- 新增 `/api/wallet/history` 与 `/api/wallet/clear-history`，并补充跨平台、价格锁定、去重和 UI 回归测试。 / Added the history endpoints and regression coverage for cross-platform persistence, price locking, deduplication, and the heatmap UI.
+- 提高浅色与深色主题下辅助文字的对比度，覆盖历史说明、统计标签、星期、账户数量、密钥掩码和版本号。 / Raised auxiliary-text contrast in light and dark themes across history labels, weekday markers, account metadata, masked keys, and version text.
+- 重排钱包设置页：账户管理与常态展开的 365 天热力图紧跟余额概览，健康检查和显示/提醒偏好后移；紧凑钱包面板仍可折叠历史区。 / Reordered wallet settings so account management and the always-visible 365-day heatmap follow the balance overview, while compact wallet panels keep the history section collapsible.
+- 全面加固账本准确性：去重键加入 provider/模型，修复清除会话后晚到样本少算、未定价状态无法恢复，并阻止在线价格同步覆盖历史固定价策略。 / Hardened ledger accuracy by isolating dedup keys per provider/model, fixing late replacements after session clearing, recovering unpriced state, and preventing live pricing sync from mutating historical flat-rate policies.
+- 为 `wallet.json` 与 `accounts.json` 补齐主备恢复和失败锁写；Windows DPAPI 与 macOS/Linux AES-GCM 均覆盖损坏密文、权限、无明文和重启读取测试。 / Added primary/backup recovery and fail-closed writes for both stores, with Windows DPAPI and macOS/Linux AES-GCM coverage for corrupt ciphertext, permissions, plaintext exclusion, and reloads.
+- 修复 320–390px 设置页被宿主导航挤压、热力图 resize 后偏离最新日期、365 个空白键盘焦点、异步旧响应覆盖和浅深色强度/对比度问题。当前 110/110 测试通过。 / Fixed narrow settings layout, recent-date tracking across resize, excessive empty keyboard stops, stale async responses, and light/dark heatmap contrast. 110/110 tests pass.
+
 ## 0.3.1 - 2026-08-23
 
 - 修复 Windows DPAPI 账户密钥在重启后无法解密的问题，并在加密文件损坏或密钥不可用时锁定写入，避免覆盖原数据。 / Fixed Windows DPAPI account keys failing to decrypt after restart and locked writes when encrypted data cannot be recovered, preventing accidental overwrite.

@@ -42,7 +42,7 @@ The package was renamed from `dsh-wallet` to `deepseek-harness-wallet` in 0.1.1.
 ## Release discipline
 
 - Do not commit, push, tag, create a GitHub Release, or publish to npm without an explicit user confirmation in the current task. Local changes and verification may be completed first, but the release step must wait for approval.
-- Treat maintenance and incremental feature work as patch updates whenever possible. After a published `0.3.0`, the next small release is `0.3.1`; never publish a lower `0.2.x` version afterward.
+- Treat maintenance and incremental feature work as patch updates whenever possible. After a published `0.3.1`, the next small release is `0.3.2`; never publish a lower `0.2.x` version afterward.
 - Before requesting release approval, report the exact version, test result, local deployment status, and the GitHub/npm actions that are still pending.
 
 ## Troubleshooting
@@ -53,7 +53,7 @@ The package was renamed from `dsh-wallet` to `deepseek-harness-wallet` in 0.1.1.
 | Balance shows an error | `DEEPSEEK_API_KEY` missing/invalid. The plugin sends the active key directly only to the official `/user/balance` endpoint; account switching also writes the selected key into the Harness credentials seam for subsequent model requests. |
 | Third-party sessions show no balance | By design — no balance API for third-party providers; only token totals are tracked. |
 | Session cost looks off | Costs are estimates from the official pricing timeline (peak/off-peak since 2026-08-17); the API-returned balance is authoritative. |
-| Plugin data | Usage data: `$DSH_HOME/storages/wallet.json`. Encrypted accounts: `$DSH_HOME/storages/accounts.json`, with an encrypted `accounts.json.bak` fallback; non-Windows AES fallback also requires `accounts.json.key`. "清除本会话" clears only the open conversation. |
+| Plugin data | Usage data: `$DSH_HOME/storages/wallet.json` with `wallet.json.bak`. Encrypted accounts: `$DSH_HOME/storages/accounts.json` with encrypted `accounts.json.bak`; non-Windows AES also requires `accounts.json.key`. Both stores recover from valid backups and fail closed when primary and backup are unreadable. "清除本会话" clears only the open conversation. |
 
 ## Platform adaptation
 

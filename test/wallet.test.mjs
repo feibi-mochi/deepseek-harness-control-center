@@ -19,6 +19,8 @@ import {
   apply as applyWallet,
   balanceCurrency,
   healthSnapshot,
+  historyDayKey,
+  normalizeHistory,
   isBeijingPeak,
   parseOfficialPricingHtml,
   pricingWindowSnapshot,
@@ -238,7 +240,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.3.1')
+  assert.equal(pkg.version, '0.3.2')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -377,6 +379,8 @@ test('official pricing parser reads vision rates and the weekend rule', () => {
   assert.deepEqual(parsed.peakWindows, [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }])
   assert.equal(parsed.weekendOffPeakSince, bj(2026, 8, 23, 0, 0))
   assert.match(parsed.ruleVersion, /^official-[0-9a-f]{12}$/)
+  assert.throws(() => parseOfficialPricingHtml(html.replace('<td>0.05元</td>', '<td>0.06元</td>')), /relationship changed/)
+  assert.throws(() => parseOfficialPricingHtml(html.replace('14:00 - 18:00', '18:00 - 14:00')), /peak window is invalid/)
 })
 
 test('official pricing parser accepts the current weekday-only wording', () => {
@@ -395,6 +399,21 @@ test('official pricing parser accepts the current weekday-only wording', () => {
   assert.equal(parsed.weekendOffPeakSince, bj(2026, 8, 23, 0, 0))
 })
 
+test('official pricing sync updates only current peak policies and preserves historical flat rates', () => {
+  hostTesting.applyOfficialPricing({
+    models: {
+      'deepseek-v4-flash': { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] },
+      'deepseek-v4-pro': { cacheHit: [0.15, 0.3], input: [4.5, 9], output: [13.5, 27] },
+      'deepseek-v4-flash-vision-exp': { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] },
+    },
+    peakWindows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+    weekendOffPeakSince: bj(2026, 8, 23, 0),
+    ruleVersion: 'official-test',
+  }, { headers: { get() { return null } } })
+  assert.deepEqual(ratesFor('deepseek-v4-flash', bj(2026, 5, 1, 10)), { cacheHit: 0.02, input: 1, output: 2 })
+  assert.deepEqual(ratesFor('deepseek-v4-flash', bj(2026, 8, 18, 10)), { cacheHit: 0.1, input: 3, output: 9 })
+  assert.equal(ratesFor('deepseek-v4-flash-vision-exp', bj(2026, 8, 20, 10)), null)
+})
 test('portable AES-GCM account encryption round-trips and rejects tampering', () => {
   const key = Buffer.alloc(32, 7)
   const iv = Buffer.alloc(12, 3)
@@ -414,6 +433,8 @@ test('health snapshot exposes compatibility, pricing sync, and encrypted account
   assert.equal(typeof health.host.compatibility.status, 'string')
   assert.equal(typeof health.pricing.status, 'string')
   assert.equal(health.accounts.encryptedAtRest, true)
+  assert.equal(typeof health.usage.status, 'string')
+  assert.equal(health.usage.retentionDays, 365)
   assert.equal(Object.hasOwn(health, 'apiKey'), false)
   assert.equal(typeof accountStorageSnapshot().scheme, 'string')
 })
@@ -585,7 +606,7 @@ test('official cost is accumulated at usage time and remains stable later', () =
   assert.equal(bucket.models['deepseek-v4-pro'].input, 2_000_000)
 
   const normalized = normalizeStoreData({
-    version: 2,
+    version: 3,
     thresholds: { CNY: 5 },
     accountThresholds: {},
     sessions: { current: { official: bucket, third: { models: {} } } },
@@ -614,7 +635,7 @@ test('legacy stores migrate once and malformed counters are sanitized', () => {
   }
   const first = normalizeStoreData(legacy, bj(2026, 8, 17, 22, 0))
   assert.equal(first.migrated, true)
-  assert.equal(first.store.version, 2)
+  assert.equal(first.store.version, 3)
   assert.equal(first.store.thresholds.CNY, 7.25)
   assert.equal(first.store.sessions.old.official.cost, 18.15)
   assert.equal(first.store.sessions.old.official.models['deepseek-v4-pro'].cacheWrite, 0)
@@ -625,6 +646,52 @@ test('legacy stores migrate once and malformed counters are sanitized', () => {
   assert.equal(second.store.sessions.old.official.cost, 18.15)
 })
 
+test('history day keys use Beijing calendar boundaries and malformed events are dropped', () => {
+  const atMs = bj(2026, 8, 23, 12)
+  assert.equal(historyDayKey(Date.parse('2026-08-22T15:59:59Z')), '2026-08-22')
+  assert.equal(historyDayKey(Date.parse('2026-08-22T16:00:00Z')), '2026-08-23')
+  const duplicateId = createHash('sha256').update('duplicate').digest('hex')
+  const oldAt = atMs - 366 * 86_400_000
+  const normalized = normalizeHistory({
+    events: {
+      [duplicateId]: {
+        occurredAt: atMs - 10_000,
+        sessionId: 'session-history', provider: 'deepseek-official', model: 'deepseek-v4-flash', official: true,
+        priced: true, cost: 0.01, usage: { input: 10, output: 20 },
+      },
+      [createHash('sha256').update('newer').digest('hex')]: {
+        occurredAt: atMs - 1_000,
+        sessionId: 'session-history', provider: 'deepseek-official', model: 'deepseek-v4-flash', official: true,
+        priced: true, cost: 0.02, usage: { input: 30, output: 40 },
+      },
+      [createHash('sha256').update('old').digest('hex')]: {
+        occurredAt: oldAt,
+        sessionId: 'session-history', provider: 'deepseek-official', model: 'deepseek-v4-flash', official: true,
+        priced: true, cost: 0.03, usage: { input: 50, output: 60 },
+      },
+      bad: { occurredAt: atMs, sessionId: 'session-history', provider: 'deepseek-official' },
+    },
+  }, atMs)
+  assert.equal(Object.keys(normalized.events).length, 2)
+  assert.equal(normalized.events[duplicateId].usage.input, 10)
+  assert.equal(normalized.timezone, 'Asia/Shanghai')
+  assert.equal(normalized.retentionDays, 365)
+})
+test('wallet store normalization bounds untrusted session and model identifiers', () => {
+  const models = {}
+  for (let index = 0; index < 510; index += 1) models['model-' + index] = { input: 1 }
+  models['bad\u0000model'] = { input: 999 }
+  const sessions = {}
+  for (let index = 0; index < 5_010; index += 1) {
+    sessions['session-' + index] = { official: { models: index === 0 ? models : {} }, third: { models: {} } }
+  }
+  sessions['bad\u0000session'] = { official: { models: {} }, third: { models: {} } }
+  const normalized = normalizeStoreData({ version: 3, thresholds: { CNY: 5 }, sessions, officialProviders: [], knownProviders: [] })
+  assert.equal(Object.keys(normalized.store.sessions).length, 5_000)
+  assert.equal(Object.keys(normalized.store.sessions['session-0'].official.models).length, 500)
+  assert.equal(Object.hasOwn(normalized.store.sessions, 'bad\u0000session'), false)
+  assert.equal(Object.hasOwn(normalized.store.sessions['session-0'].official.models, 'bad\u0000model'), false)
+})
 test('unknown official models retain tokens and mark the session cost unpriced', () => {
   const bucket = { models: {}, cost: 0, priced: true }
   addOfficialUsage(bucket, 'future-model', { inputTokens: 123, outputTokens: 45 }, Date.now())
@@ -1506,6 +1573,8 @@ test('normalizeAccountsData: filters malformed entries and validates activeId', 
   // Garbage input degrades to an empty store.
   assert.deepEqual(normalizeAccountsData(null), { version: 2, accounts: [], activeId: null })
   assert.deepEqual(normalizeAccountsData([1, 2]), { version: 2, accounts: [], activeId: null })
+  const many = normalizeAccountsData({ accounts: Array.from({ length: 60 }, (_, index) => ({ id: 'acc_' + index, name: 'A' + index, apiKey: 'sk-valid-' + String(index).padStart(8, '0') })) })
+  assert.equal(many.accounts.length, 50)
 })
 
 test('maskKey and validateApiKey: masking and key sanity checks', () => {
@@ -1517,6 +1586,8 @@ test('maskKey and validateApiKey: masking and key sanity checks', () => {
   assert.equal(validateApiKey('   '), 'API key must not be empty')
   assert.equal(validateApiKey('short'), 'API key looks too short')
   assert.equal(validateApiKey('has space key123'), 'API key must not contain whitespace')
+  assert.equal(validateApiKey('sk-valid\u0000bad'), 'API key must not contain control characters')
+  assert.equal(validateApiKey('x'.repeat(513)), 'API key is too long')
   assert.equal(validateApiKey('sk-abcdefgh'), null)
   assert.equal(validateApiKey(42), 'API key must be a string')
 })
@@ -1706,7 +1777,7 @@ test('settings section renders populated data from the wallet APIs', async () =>
     ok: true,
     json: () => Promise.resolve(
       String(url).includes('/accounts')
-        ? { ok: true, activeId: 'acc_1', accounts: [{ id: 'acc_1', name: '主账户', maskedKey: 'sk-0***d649', active: true }] }
+        ? { ok: true, activeId: 'acc_1', accounts: [{ id: 'acc_1', name: '主账户', maskedKey: 'sk-a***0001', active: true }] }
         : { ok: true, balance: { available: true, total: 1.98, currency: 'USD' }, lowBalance: false, threshold: 3, accounts: { activeId: 'acc_1', activeName: '主账户', count: 1 }, session: { official: { cost: 0.05 } } }
     ),
   })
@@ -1721,6 +1792,50 @@ test('settings section renders populated data from the wallet APIs', async () =>
   assert.ok(/1.98/.test(text), 'the balance figure must render')
 })
 
+test('history panel exposes a collapsed local 365-day ledger entry without mixing it into the chip', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const Panel = exports.__testing.UsageHistoryPanel
+  const tree = renderer.render(Panel, { sessionId: 'session-history' })
+  const toggle = findElement(tree, (element) => element.type === 'button' && element.props['aria-label'] === '查看历史用量')
+  assert.ok(toggle, 'history stays collapsed until explicitly opened')
+  assert.match(JSON.stringify(tree), /保留 365 天/)
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /\/api\/wallet\/history/)
+  assert.match(source, /dshw_historyHeatmap/)
+  assert.match(source, /清除历史账本/)
+  assert.match(source, /key: 'history', sessionId: null, alwaysOpen: true/, 'settings history must stay expanded')
+})
+
+test('settings puts account management and always-open history directly below balance', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const tree = renderer.render(exports.__testing.WalletSettingsSection, { close: () => {} })
+  const rows = Array.isArray(tree.props.children) ? tree.props.children : [tree.props.children]
+  const keys = rows.map((row) => row && row.props ? row.props.key : null)
+  const balanceIndex = keys.indexOf('balcard')
+  const accountIndex = keys.indexOf('acc-t')
+  const historyIndex = keys.indexOf('history')
+  const healthIndex = keys.indexOf('health')
+  assert.ok(balanceIndex >= 0 && accountIndex > balanceIndex, 'account management follows the balance overview')
+  assert.ok(historyIndex > accountIndex, 'always-open history follows account management')
+  assert.ok(healthIndex > historyIndex, 'health and preferences remain below primary account tasks')
+  const historyElement = rows[historyIndex]
+  assert.equal(historyElement.props.alwaysOpen, true)
+})
+test('settings history is permanently expanded while compact history stays collapsible', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const Panel = exports.__testing.UsageHistoryPanel
+  const settingsTree = renderer.render(Panel, { sessionId: null, alwaysOpen: true })
+  assert.equal(findElement(settingsTree, (element) => element.type === 'button' && element.props['aria-label'] === '查看历史用量'), null)
+  assert.ok(findElement(settingsTree, (element) => element.props && element.props.children === '正在读取本地账本…'), 'settings shows the loading body immediately')
+
+  const compactRenderer = createHookRenderer()
+  const compactBundle = loadClientBundle(compactRenderer.React)
+  const compactTree = compactRenderer.render(compactBundle.exports.__testing.UsageHistoryPanel, { sessionId: 'session-history' })
+  assert.ok(findElement(compactTree, (element) => element.type === 'button' && element.props['aria-label'] === '查看历史用量'))
+})
 function installWalletRouteHarness(mod, credentials) {
   const routes = new Map()
   let usageTap = null
@@ -1749,6 +1864,31 @@ function installWalletRouteHarness(mod, credentials) {
   return { call, usageTap }
 }
 
+test('usage-store lock state disables destructive wallet controls', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /var usageLocked =/)
+  assert.match(source, /本地用量账本无法读取，阈值保存与清除已禁用/)
+  assert.match(source, /disabled: usageLocked, onClick: saveThreshold/)
+  assert.match(source, /用量账本存储已锁定，无法清除/)
+  assert.match(source, /checked: true, disabled: usageLocked/, 'official provider toggles are disabled while the store is locked')
+  assert.match(source, /checked: false, disabled: usageLocked/, 'known provider toggles are disabled while the store is locked')
+})
+test('history UI guards stale requests, starts at recent dates, and limits keyboard stops', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /historyRequestRef\.current/, 'history requests need a latest-response guard')
+  assert.match(source, /node\.scrollWidth - node\.clientWidth/, 'the 365-day grid should open at the latest dates')
+  assert.match(source, /ResizeObserver/, 'the recent-date position should survive responsive resizes')
+  assert.match(source, /historyFollowLatestRef/, 'manual browsing of older dates must not be overwritten on resize')
+  assert.match(source, /tabIndex: day\.calls > 0 \|\| isSelected \|\| isToday \? 0 : -1/, 'empty dates must not create hundreds of keyboard stops')
+  assert.match(source, /dshw_historyCellToday/, 'today needs a visual marker independent of heat intensity')
+  assert.match(source, /aria-current.*date/, 'today is announced to assistive technology')
+})
+test('provider classification UI states that history is not retroactively repriced', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /仅影响勾选后的后续调用；已记录的历史用量不重新计价/)
+  assert.match(readProjectFile('README.md'), /Existing history is not retroactively reclassified/)
+  assert.match(readProjectFile('docs/i18n/README.zh-CN.md'), /既有历史不会追溯重分桶/)
+})
 test('provider aliases are actually billed in the official bucket after opt-in', async () => {
   const previousHome = process.env.DSH_HOME
   const dir = mkdtempSync(join(tmpdir(), 'dshw-provider-route-'))
@@ -1784,6 +1924,217 @@ test('provider aliases are actually billed in the official bucket after opt-in',
   }
 })
 
+test('history route deduplicates stable usage identities and keeps history clearing separate', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-history-'))
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?history-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const harness = installWalletRouteHarness(mod, undefined)
+    assert.equal(typeof harness.usageTap, 'function')
+    async function record(options, usage) {
+      const downstream = async function* () {
+        yield { type: 'usage', usage }
+      }
+      for await (const _ of harness.usageTap(options, () => downstream())) {}
+    }
+    const identity = { sessionId: 'session-history', provider: 'deepseek-official', model: 'deepseek-v4-flash', turn: 1, step: 1 }
+    await record(identity, { inputTokens: 1_000, outputTokens: 2_000 })
+    await record(identity, { inputTokens: 3_000, outputTokens: 4_000 })
+    await record({ sessionId: 'session-history', provider: 'third-party', model: 'other-model', turn: 1, step: 2 }, { inputTokens: 500, outputTokens: 600 })
+    await record({ sessionId: 'session-history', provider: 'deepseek-official', model: 'deepseek-v4-pro', turn: 1, step: 1 }, { inputTokens: 100, outputTokens: 200 })
+
+    let response = await harness.call('/api/wallet/history', 'GET', undefined, '/api/wallet/history?days=365')
+    assert.equal(response.status, 200)
+    assert.equal(response.json.days.length, 365)
+    assert.equal(response.json.storage.status, 'ready')
+    assert.equal(response.json.summary.total.calls, 3)
+    assert.equal(response.json.summary.total.totalTokens, 8_400)
+    assert.equal(response.json.summary.total.cost, response.json.summary.total.cost, 'summary cost is serializable')
+    assert.equal(response.json.days.filter((day) => day.calls > 0).length, 1)
+
+    response = await harness.call('/api/wallet/snapshot', 'GET', undefined, '/api/wallet/snapshot?session=session-history')
+    assert.equal(response.json.session.official.tokens.input, 3_100)
+    assert.equal(response.json.session.official.tokens.output, 4_200)
+    assert.equal(response.json.session.third.tokens.input, 500)
+    assert.equal(response.json.usageStorage.locked, false)
+
+    response = await harness.call('/api/wallet/history', 'GET', undefined, '/api/wallet/history?days=6')
+    assert.equal(response.status, 400)
+    response = await harness.call('/api/wallet/history', 'GET', undefined, '/api/wallet/history?days=7abc')
+    assert.equal(response.status, 400)
+    response = await harness.call('/api/wallet/history', 'POST')
+    assert.equal(response.status, 405)
+
+    response = await harness.call('/api/wallet/clear-history', 'POST')
+    assert.equal(response.status, 200)
+    assert.equal(response.json.ok, true)
+    response = await harness.call('/api/wallet/history', 'GET')
+    assert.equal(response.json.summary.total.calls, 0)
+    response = await harness.call('/api/wallet/snapshot', 'GET', undefined, '/api/wallet/snapshot?session=session-history')
+    assert.equal(response.json.session.official.tokens.input, 3_100, 'clearing history must not clear current-session counters')
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 650))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+test('clearing a session before a stable usage replacement does not undercount the new sample', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-history-clear-replace-'))
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?history-clear-replace-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const harness = installWalletRouteHarness(mod, undefined)
+    async function record(usage) {
+      const downstream = async function* () { yield { type: 'usage', usage } }
+      for await (const _ of harness.usageTap({
+        sessionId: 'session-clear-replace', provider: 'deepseek-official', model: 'deepseek-v4-flash', turn: 2, step: 3,
+      }, () => downstream())) {}
+    }
+    await record({ inputTokens: 1_000, outputTokens: 2_000 })
+    await harness.call('/api/wallet/clear-session', 'POST', { session: 'session-clear-replace' })
+    await record({ inputTokens: 3_000, outputTokens: 4_000 })
+    const snapshot = await harness.call('/api/wallet/snapshot', 'GET', undefined, '/api/wallet/snapshot?session=session-clear-replace')
+    assert.equal(snapshot.json.session.official.tokens.input, 3_000)
+    assert.equal(snapshot.json.session.official.tokens.output, 4_000)
+    const history = await harness.call('/api/wallet/history', 'GET')
+    assert.equal(history.json.summary.total.calls, 1)
+    assert.equal(history.json.summary.total.totalTokens, 7_000)
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 650))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('reclassifying a stable unpriced provider sample restores official priced state', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-history-reclassify-'))
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?history-reclassify-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const harness = installWalletRouteHarness(mod, undefined)
+    await harness.call('/api/wallet/official-providers', 'POST', { providers: ['deepseek-proxy'] })
+    async function record(usage) {
+      const downstream = async function* () { yield { type: 'usage', usage } }
+      for await (const _ of harness.usageTap({
+        sessionId: 'session-reclassify', provider: 'deepseek-proxy', model: 'future-model', turn: 4, step: 1,
+      }, () => downstream())) {}
+    }
+    await record({ inputTokens: 100, outputTokens: 150 })
+    let snapshot = await harness.call('/api/wallet/snapshot', 'GET', undefined, '/api/wallet/snapshot?session=session-reclassify')
+    assert.equal(snapshot.json.session.official.priced, false)
+    await harness.call('/api/wallet/official-providers', 'POST', { providers: [] })
+    await record({ inputTokens: 200, outputTokens: 300 })
+    snapshot = await harness.call('/api/wallet/snapshot', 'GET', undefined, '/api/wallet/snapshot?session=session-reclassify')
+    assert.equal(snapshot.json.session.official.priced, true)
+    assert.equal(snapshot.json.session.official.tokens.input, 0)
+    assert.equal(snapshot.json.session.third.tokens.input, 200)
+    const history = await harness.call('/api/wallet/history', 'GET')
+    assert.equal(history.json.summary.total.calls, 1)
+    assert.equal(history.json.days.find((day) => day.calls === 1).third.calls, 1)
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 650))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+test('history ledger persists across a plugin reload without storing conversation content', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-history-reload-'))
+  process.env.DSH_HOME = dir
+  const first = await import('../index.js?history-reload-a-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const firstHarness = installWalletRouteHarness(first, undefined)
+    const downstream = async function* () {
+      yield { type: 'usage', usage: { inputTokens: 7_000, outputTokens: 8_000 } }
+    }
+    for await (const _ of firstHarness.usageTap({
+      sessionId: 'session-history-reload', provider: 'deepseek-official', model: 'deepseek-v4-pro', requestId: 'reload-request-1',
+    }, () => downstream())) {}
+    await new Promise(resolve => setTimeout(resolve, 650))
+    const walletPath = join(dir, 'storages', 'wallet.json')
+    const raw = readFileSync(walletPath, 'utf8')
+    assert.doesNotMatch(raw, /prompt|answer|tool_arguments/i)
+    const second = await import('../index.js?history-reload-b-' + dir.replace(/[\\/]/g, '_'))
+    const secondHarness = installWalletRouteHarness(second, undefined)
+    const response = await secondHarness.call('/api/wallet/history', 'GET')
+    assert.equal(response.json.summary.total.totalTokens, 15_000)
+    assert.equal(response.json.summary.total.calls, 1)
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 650))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+test('missing primary usage ledger recovers from its backup without overwriting the backup', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-history-backup-'))
+  process.env.DSH_HOME = dir
+  const first = await import('../index.js?history-backup-a-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const firstHarness = installWalletRouteHarness(first, undefined)
+    const downstream = async function* () { yield { type: 'usage', usage: { inputTokens: 900, outputTokens: 1_100 } } }
+    for await (const _ of firstHarness.usageTap({
+      sessionId: 'session-history-backup', provider: 'deepseek-official', model: 'deepseek-v4-flash', requestId: 'history-backup-1',
+    }, () => downstream())) {}
+    await new Promise(resolve => setTimeout(resolve, 650))
+    const walletPath = join(dir, 'storages', 'wallet.json')
+    const backupPath = walletPath + '.bak'
+    assert.equal(existsSync(walletPath), true)
+    assert.equal(existsSync(backupPath), true)
+    const backupBefore = readFileSync(backupPath, 'utf8')
+    unlinkSync(walletPath)
+
+    const second = await import('../index.js?history-backup-b-' + dir.replace(/[\\/]/g, '_'))
+    const secondHarness = installWalletRouteHarness(second, undefined)
+    const health = await secondHarness.call('/api/wallet/health', 'GET')
+    assert.equal(health.json.usage.status, 'recovered')
+    const history = await secondHarness.call('/api/wallet/history', 'GET')
+    assert.equal(history.json.summary.total.totalTokens, 2_000)
+    await new Promise(resolve => setTimeout(resolve, 650))
+    assert.equal(existsSync(walletPath), true, 'recovered ledger is restored to the primary path')
+    assert.equal(readFileSync(backupPath, 'utf8'), backupBefore, 'valid backup is not replaced by a missing or corrupt primary')
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 100))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('unreadable primary and backup usage ledgers fail closed and reject writes', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-history-locked-'))
+  const storageDir = join(dir, 'storages')
+  mkdirSync(storageDir, { recursive: true })
+  const walletPath = join(storageDir, 'wallet.json')
+  const backupPath = walletPath + '.bak'
+  writeFileSync(walletPath, '{broken-primary')
+  writeFileSync(backupPath, '{broken-backup')
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?history-locked-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const harness = installWalletRouteHarness(mod, undefined)
+    const health = await harness.call('/api/wallet/health', 'GET')
+    assert.equal(health.json.usage.status, 'locked')
+    assert.equal(health.json.usage.locked, true)
+    let response = await harness.call('/api/wallet/threshold', 'POST', { threshold: 4 })
+    assert.equal(response.status, 423)
+    assert.equal(response.json.error, 'usage-storage-locked')
+    response = await harness.call('/api/wallet/clear-history', 'POST')
+    assert.equal(response.status, 423)
+    response = await harness.call('/api/wallet/official-providers', 'POST', { providers: ['proxy'] })
+    assert.equal(response.status, 423)
+    await new Promise(resolve => setTimeout(resolve, 650))
+    assert.equal(readFileSync(walletPath, 'utf8'), '{broken-primary')
+    assert.equal(readFileSync(backupPath, 'utf8'), '{broken-backup')
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 100))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 test('first account rolls back activeId when the host refuses credential synchronization', async () => {
   const previousHome = process.env.DSH_HOME
   const dir = mkdtempSync(join(tmpdir(), 'dshw-account-rollback-'))
@@ -1911,6 +2262,47 @@ test('missing primary account file recovers from its encrypted backup', async ()
   }
 })
 
+test('corrupt primary account file recovers from a valid encrypted backup', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-account-corrupt-recovery-'))
+  process.env.DSH_HOME = dir
+  try {
+    const first = await import('../index.js?account-corrupt-first-' + Date.now() + '-' + dir.replace(/[\\/]/g, '_'))
+    const firstHarness = installWalletRouteHarness(first, {
+      async set() {},
+      async resolve() { return undefined },
+    })
+    const added = await firstHarness.call('/api/wallet/accounts', 'POST', {
+      name: '损坏恢复账户', apiKey: 'sk-corrupt-recovery-1234567890',
+    })
+    assert.equal(added.json.ok, true)
+    await new Promise(resolve => setTimeout(resolve, 750))
+    const accountPath = join(dir, 'storages', 'accounts.json')
+    const backupPath = accountPath + '.bak'
+    const backupBefore = readFileSync(backupPath, 'utf8')
+    const tampered = JSON.parse(readFileSync(accountPath, 'utf8'))
+    tampered.accounts[0].apiKeyEncrypted.payload = Buffer.from('tampered-ciphertext').toString('base64')
+    writeFileSync(accountPath, JSON.stringify(tampered))
+
+    const second = await import('../index.js?account-corrupt-second-' + Date.now() + '-' + dir.replace(/[\\/]/g, '_'))
+    const secondHarness = installWalletRouteHarness(second, {
+      async set() {},
+      async resolve() { return undefined },
+    })
+    const listed = await secondHarness.call('/api/wallet/accounts', 'GET')
+    assert.equal(listed.json.accounts.length, 1)
+    assert.equal(listed.json.accounts[0].name, '损坏恢复账户')
+    const health = await secondHarness.call('/api/wallet/health', 'GET')
+    assert.equal(health.json.accounts.status, 'recovered')
+    await new Promise(resolve => setTimeout(resolve, 750))
+    assert.doesNotMatch(readFileSync(accountPath, 'utf8'), /tampered-ciphertext|sk-corrupt-recovery/)
+    assert.equal(readFileSync(backupPath, 'utf8'), backupBefore, 'valid encrypted backup is preserved during recovery')
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 100))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 test('an unreadable encrypted account store fails closed without overwriting the file', async () => {
   const previousHome = process.env.DSH_HOME
   const dir = mkdtempSync(join(tmpdir(), 'dshw-account-locked-'))
@@ -2300,6 +2692,19 @@ test('dark mode theme compliance: client css avoids un-themed hardcoded white ba
   assert.match(source, /--dsw-alias-bg-layer-1/g, 'standard layer-1 bg variable is used')
 })
 
+test('mobile settings adaptation avoids :has and scopes host layout changes to the wallet dialog', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.doesNotMatch(source, /:has\(/, 'older desktop WebViews must not depend on :has()')
+  assert.match(source, /dshw_settingsHostDialog/, 'wallet settings should mark only its own host dialog')
+  assert.match(source, /settingsSectionRef\.current/, 'the host marker is attached from the mounted wallet section')
+  assert.match(source, /@media \(max-width:560px\)/, 'narrow settings need a dedicated breakpoint')
+})
+test('history and settings auxiliary labels use a readable theme tier', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.doesNotMatch(source, /dshw_history(?:TitleCopy|Summary|Legend|WeekLabels|Empty)[^\n]*label-dimmed/, 'history text must not use the overly faint dimmed tier')
+  assert.match(source, /dshw_historySummary span[^\n]*label-secondary/, 'history summary labels need a readable secondary tier')
+  assert.match(source, /dshw_accountCount[^\n]*label-secondary/, 'account count needs a readable secondary tier')
+})
 test('floating peak card positions are clamped for saved coordinates, scale changes, and small viewports', () => {
   const renderer = createHookRenderer()
   const { exports } = loadClientBundle(renderer.React)
