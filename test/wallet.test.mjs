@@ -14,9 +14,12 @@ import { runInNewContext } from 'node:vm'
 import {
   PRICE_POLICIES,
   addOfficialUsage,
+  accountStorageSnapshot,
   apply as applyWallet,
   balanceCurrency,
+  healthSnapshot,
   isBeijingPeak,
+  parseOfficialPricingHtml,
   ratesFor,
   costOf,
   normalizeStoreData,
@@ -233,7 +236,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.2.6')
+  assert.equal(pkg.version, '0.3.0')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -348,6 +351,40 @@ test('policy table: since dates match the documented timeline', () => {
   // 2026-08-17 00:00 Beijing = 2026-08-16T16:00Z.
   assert.equal(PRICE_POLICIES[2].since, Date.UTC(2026, 7, 16, 16))
   assert.equal(PRICE_POLICIES[2].peakOffPeak, true)
+  assert.deepEqual(PRICE_POLICIES[1].models['deepseek-v4-flash-vision-exp'], { cacheHit: 0.02, input: 1, output: 2 })
+  assert.deepEqual(PRICE_POLICIES[2].models['deepseek-v4-flash-vision-exp'], { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] })
+})
+
+test('official pricing parser reads vision rates and the weekend rule', () => {
+  const html = `<table>
+    <tr><td>模型</td><td>deepseek-v4-flash</td><td>deepseek-v4-pro</td><td>deepseek-v4-flash-vision-exp</td></tr>
+    <tr><td>百万tokens输入（缓存命中）</td><td>空闲时段</td><td>0.05元</td><td>0.15元</td><td>0.05元</td></tr>
+    <tr><td>高峰时段</td><td>0.10元</td><td>0.30元</td><td>0.10元</td></tr>
+    <tr><td>百万tokens输入（缓存未命中）</td><td>空闲时段</td><td>1.5元</td><td>4.5元</td><td>1.5元</td></tr>
+    <tr><td>高峰时段</td><td>3.0元</td><td>9.0元</td><td>3.0元</td></tr>
+    <tr><td>百万tokens输出</td><td>空闲时段</td><td>4.5元</td><td>13.5元</td><td>4.5元</td></tr>
+    <tr><td>高峰时段</td><td>9.0元</td><td>27.0元</td><td>9.0元</td></tr>
+  </table>
+  <p>高峰时段为北京时间 9:00 - 12:00、14:00 - 18:00（其余为空闲时段）。我们将于北京时间2026年8月23日（周日）00:00起，对峰谷计费规则做出调整，周末（周六、周日）全天不再区分峰谷时段，统一按照低谷时段价格收取调用费用。</p>${'x'.repeat(500)}`
+  const parsed = parseOfficialPricingHtml(html)
+  assert.deepEqual(parsed.models['deepseek-v4-flash-vision-exp'], {
+    cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9],
+  })
+  assert.deepEqual(parsed.peakWindows, [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }])
+  assert.equal(parsed.weekendOffPeakSince, bj(2026, 8, 23, 0, 0))
+  assert.match(parsed.ruleVersion, /^official-[0-9a-f]{12}$/)
+})
+
+test('health snapshot exposes compatibility, pricing sync, and encrypted account status without secrets', () => {
+  const health = healthSnapshot()
+  assert.equal(health.ok, true)
+  assert.equal(health.plugin.name, 'deepseek-harness-wallet')
+  assert.equal(typeof health.plugin.version, 'string')
+  assert.equal(typeof health.host.compatibility.status, 'string')
+  assert.equal(typeof health.pricing.status, 'string')
+  assert.equal(health.accounts.encryptedAtRest, true)
+  assert.equal(Object.hasOwn(health, 'apiKey'), false)
+  assert.equal(typeof accountStorageSnapshot().scheme, 'string')
 })
 
 test('isBeijingPeak: peak windows are 09:00-12:00 and 14:00-18:00 Beijing', () => {
@@ -1389,8 +1426,8 @@ test('normalizeAccountsData: filters malformed entries and validates activeId', 
   // An activeId pointing at a missing account is dropped.
   assert.equal(normalizeAccountsData({ accounts: data.accounts, activeId: 'acc_missing' }).activeId, null)
   // Garbage input degrades to an empty store.
-  assert.deepEqual(normalizeAccountsData(null), { version: 1, accounts: [], activeId: null })
-  assert.deepEqual(normalizeAccountsData([1, 2]), { version: 1, accounts: [], activeId: null })
+  assert.deepEqual(normalizeAccountsData(null), { version: 2, accounts: [], activeId: null })
+  assert.deepEqual(normalizeAccountsData([1, 2]), { version: 2, accounts: [], activeId: null })
 })
 
 test('maskKey and validateApiKey: masking and key sanity checks', () => {
@@ -1689,6 +1726,35 @@ test('first account rolls back activeId when the host refuses credential synchro
   } finally {
     process.env.DSH_HOME = previousHome
     await new Promise(resolve => setTimeout(resolve, 550))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('account persistence encrypts API keys instead of writing plaintext', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-account-encryption-'))
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?account-encryption-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const harness = installWalletRouteHarness(mod, {
+      async set() {},
+      async resolve() { return undefined },
+    })
+    const response = await harness.call('/api/wallet/accounts', 'POST', {
+      name: '加密账户', apiKey: 'sk-encrypted-1234567890',
+    })
+    assert.equal(response.json.ok, true)
+    await new Promise(resolve => setTimeout(resolve, 700))
+    const raw = readFileSync(join(dir, 'storages', 'accounts.json'), 'utf8')
+    assert.doesNotMatch(raw, /sk-encrypted-1234567890/)
+    assert.match(raw, /apiKeyEncrypted/)
+    const stored = JSON.parse(raw)
+    assert.equal(stored.version, 2)
+    assert.equal(stored.accounts[0].apiKeyEncrypted.version, 1)
+    assert.equal((await harness.call('/api/wallet/health', 'GET')).json.accounts.encryptedAtRest, true)
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 100))
     rmSync(dir, { recursive: true, force: true })
   }
 })
@@ -2114,5 +2180,3 @@ test('storage falls back to memory readably when the native write is refused', (
   adapter.storage.removeItem('dshw-peak-dock-v1')
   assert.equal(adapter.storage.getItem('dshw-peak-dock-v1'), 'stale-native-value', 'after removal the native value is authoritative again')
 })
-
-

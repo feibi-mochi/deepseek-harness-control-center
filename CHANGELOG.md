@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.0 - 2026-08-23
+
+- 新增 `deepseek-v4-flash-vision-exp` 视觉模型计费，沿用 V4 Flash 的峰谷价格；图片 token 由 Harness 上报后与文本 token 一起计入。 / Added billing for `deepseek-v4-flash-vision-exp` using V4 Flash peak/off-peak rates; image tokens reported by Harness are counted with text tokens.
+- 新增官方价格页自动检查：成功解析并完整校验后才应用新规则，网络失败或页面结构变化时保留内置规则并显示状态。 / Added official pricing-page sync: new rules apply only after complete validation; network failures or schema changes keep the built-in policy and expose the status.
+- 新增 Harness 健康检查：显示宿主/插件版本、兼容性、价格同步状态与无敏感信息的诊断复制。 / Added Harness health checks for host/plugin versions, compatibility, pricing-sync status, and safe diagnostic copying.
+- 多账户 API Key 改为加密存储：Windows 使用当前用户 DPAPI，其他系统使用 AES-GCM 本地密钥文件；兼容旧版明文账户文件并在下次保存时迁移。 / Encrypted multi-account API keys at rest with Windows DPAPI or an AES-GCM local key file; legacy plaintext account files migrate on the next save.
+
 ## 0.2.6 - 2026-08-23
 
 - 跟随 DeepSeek 官方规则更新峰谷计费：自 2026-08-23 北京时间 00:00 起，周六、周日全天按低谷价计费；工作日高峰仍为 09:00–12:00、14:00–18:00。 / Updated peak/off-peak billing to match DeepSeek's official rule: from 2026-08-23 00:00 Beijing, Saturday and Sunday are all-day off-peak; weekday peak windows remain 09:00–12:00 and 14:00–18:00.

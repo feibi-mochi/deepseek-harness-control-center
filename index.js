@@ -16,8 +16,9 @@
  *    seam when no account is active;
  *  - the /api/wallet routes the browser chip polls.
  */
-import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -26,10 +27,17 @@ export const inject = ['webServer']
 
 const OFFICIAL_PROVIDER = 'deepseek-official'
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
+const PLUGIN_VERSION = '0.3.0'
+const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
+const PRICING_SYNC_INTERVAL_MS = 6 * 60 * 60_000
+const PRICING_SYNC_TIMEOUT_MS = 8_000
+const MIN_HOST_VERSION = '0.1.0-rc.8'
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const STORE_PATH = join(DSH_HOME, 'storages', 'wallet.json')
 const ACCOUNTS_PATH = join(DSH_HOME, 'storages', 'accounts.json')
-const ACCOUNTS_VERSION = 1
+const ACCOUNTS_KEY_PATH = ACCOUNTS_PATH + '.key'
+const ACCOUNTS_VERSION = 2
+const ACCOUNTS_CRYPTO_VERSION = 1
 const CREDENTIAL_REF = 'DEEPSEEK_API_KEY'
 const DEFAULT_THRESHOLD = 5
 const BALANCE_REFRESH_MS = 60_000
@@ -39,10 +47,12 @@ const STORE_VERSION = 2
 // From 2026-08-23 00:00 Beijing, Saturday and Sunday are off-peak all day.
 // Exposed to clients via snapshot.pricingWindows so the ring clock renders
 // from the active policy instead of hard-coding hours in the bundle.
-const PEAK_WINDOWS = [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }]
+const DEFAULT_PEAK_WINDOWS = [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }]
 const OFF_PEAK_RATE = 0.5
 const BEIJING_OFFSET_MS = 8 * 3600_000
 const WEEKEND_OFF_PEAK_SINCE = Date.UTC(2026, 7, 22, 16)
+let peakWindows = DEFAULT_PEAK_WINDOWS.map((window) => ({ ...window }))
+let weekendOffPeakSince = WEEKEND_OFF_PEAK_SINCE
 
 function isBeijingWeekend(atMs) {
   if (!Number.isFinite(atMs)) return false
@@ -52,9 +62,9 @@ function isBeijingWeekend(atMs) {
 }
 
 export function isBeijingPeak(atMs) {
-  if (atMs >= WEEKEND_OFF_PEAK_SINCE && isBeijingWeekend(atMs)) return false
+  if (atMs >= weekendOffPeakSince && isBeijingWeekend(atMs)) return false
   const hours = ((atMs + BEIJING_OFFSET_MS) % 86_400_000) / 3_600_000
-  return (hours >= 9 && hours < 12) || (hours >= 14 && hours < 18)
+  return peakWindows.some((window) => hours >= window.startHour && hours < window.endHour)
 }
 
 // Pricing timeline (CNY per 1M tokens; cacheWrite is not billed by DeepSeek).
@@ -72,6 +82,7 @@ export const PRICE_POLICIES = [
     models: {
       'deepseek-v4-flash': { cacheHit: 0.02, input: 1, output: 2 },
       'deepseek-v4-pro': { cacheHit: 0.025, input: 3, output: 6 },
+      'deepseek-v4-flash-vision-exp': { cacheHit: 0.02, input: 1, output: 2 },
     },
   },
   {
@@ -81,13 +92,241 @@ export const PRICE_POLICIES = [
     models: {
       'deepseek-v4-flash': { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] },
       'deepseek-v4-pro': { cacheHit: [0.15, 0.3], input: [4.5, 9], output: [13.5, 27] },
+      'deepseek-v4-flash-vision-exp': { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] },
     },
   },
 ]
 
+let activePricePolicies = PRICE_POLICIES
+let pricingSync = {
+  status: 'built-in',
+  source: PRICING_SOURCE_URL,
+  checkedAt: 0,
+  etag: null,
+  lastModified: null,
+  ruleVersion: 'built-in-2026-08-23',
+  message: '尚未检查官方价格页',
+}
+
+function decodeHtmlText(value) {
+  return String(value)
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function numericCells(row, count) {
+  const values = row.slice(Math.max(0, row.length - count)).map((cell) => {
+    const match = decodeHtmlText(cell).match(/\d+(?:\.\d+)?/)
+    return match === null ? null : Number(match[0])
+  })
+  return values.length === count && values.every((value) => Number.isFinite(value)) ? values : null
+}
+
+/**
+ * Parse the stable, server-rendered pricing table from DeepSeek's official
+ * documentation. A failed parse is deliberately treated as review-required;
+ * the wallet never silently bills from a partially understood page.
+ */
+export function parseOfficialPricingHtml(html) {
+  if (typeof html !== 'string' || html.length < 500) throw new Error('official pricing page is empty')
+  const rows = [...html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) =>
+    [...match[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => decodeHtmlText(cell[1])),
+  ).filter((row) => row.length > 0)
+  const header = rows.find((row) => row.some((cell) => cell === 'deepseek-v4-flash'))
+  const models = header ? header.filter((cell) => /^deepseek-v4-[a-z0-9-]+$/i.test(cell)) : []
+  const requiredModels = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp']
+  if (models.length < requiredModels.length || requiredModels.some((model) => !models.includes(model))) {
+    throw new Error('official pricing model table changed')
+  }
+
+  function findPair(label) {
+    const index = rows.findIndex((row) => row.some((cell) => cell.includes(label)) && row.some((cell) => cell.includes('空闲时段')))
+    if (index < 0 || !rows[index + 1]?.some((cell) => cell.includes('高峰时段'))) throw new Error('official pricing rate rows changed')
+    const offPeak = numericCells(rows[index], models.length)
+    const peak = numericCells(rows[index + 1], models.length)
+    if (offPeak === null || peak === null) throw new Error('official pricing values changed')
+    return { offPeak, peak }
+  }
+
+  const cacheHit = findPair('缓存命中')
+  const input = findPair('缓存未命中')
+  const output = findPair('百万tokens输出')
+  const modelsWithRates = {}
+  for (const model of requiredModels) {
+    const index = models.indexOf(model)
+    modelsWithRates[model] = {
+      cacheHit: [cacheHit.offPeak[index], cacheHit.peak[index]],
+      input: [input.offPeak[index], input.peak[index]],
+      output: [output.offPeak[index], output.peak[index]],
+    }
+  }
+  const text = decodeHtmlText(html)
+  const windowMatch = text.match(/高峰时段为北京时间\s*(\d{1,2}):00\s*-\s*(\d{1,2}):00、\s*(\d{1,2}):00\s*-\s*(\d{1,2}):00/)
+  if (windowMatch === null) throw new Error('official peak window changed')
+  const parsedWindows = [
+    { startHour: Number(windowMatch[1]), endHour: Number(windowMatch[2]) },
+    { startHour: Number(windowMatch[3]), endHour: Number(windowMatch[4]) },
+  ]
+  const weekendMatch = text.match(/北京时间\s*(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日[^。]*?00:00起[^。]*?周末[^。]*?低谷/)
+  if (weekendMatch === null) throw new Error('official weekend rule changed')
+  const weekendSince = Date.UTC(
+    Number(weekendMatch[1]), Number(weekendMatch[2]) - 1, Number(weekendMatch[3]), 0, 0, 0, 0,
+  ) - BEIJING_OFFSET_MS
+  return {
+    models: modelsWithRates,
+    peakWindows: parsedWindows,
+    weekendOffPeakSince: weekendSince,
+    ruleVersion: 'official-' + createHash('sha256').update(JSON.stringify({ modelsWithRates, parsedWindows, weekendSince })).digest('hex').slice(0, 12),
+  }
+}
+
+function applyOfficialPricing(parsed, response) {
+  const base = PRICE_POLICIES[PRICE_POLICIES.length - 1]
+  activePricePolicies = [
+    ...PRICE_POLICIES.slice(0, -1),
+    { ...base, models: parsed.models },
+  ]
+  peakWindows = parsed.peakWindows.map((window) => ({ ...window }))
+  weekendOffPeakSince = parsed.weekendOffPeakSince
+  pricingSync = {
+    status: 'synced',
+    source: PRICING_SOURCE_URL,
+    checkedAt: Date.now(),
+    etag: response?.headers?.get?.('etag') ?? pricingSync.etag,
+    lastModified: response?.headers?.get?.('last-modified') ?? pricingSync.lastModified,
+    ruleVersion: parsed.ruleVersion,
+    message: '已同步官方价格页',
+  }
+}
+
+async function syncOfficialPricing(logger) {
+  if (typeof fetch !== 'function') return
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), PRICING_SYNC_TIMEOUT_MS)
+  try {
+    const headers = {}
+    if (pricingSync.etag) headers['if-none-match'] = pricingSync.etag
+    if (pricingSync.lastModified) headers['if-modified-since'] = pricingSync.lastModified
+    const response = await fetch(PRICING_SOURCE_URL, { headers, signal: controller.signal })
+    if (response.status === 304) {
+      pricingSync = { ...pricingSync, status: 'synced', checkedAt: Date.now(), message: '官方价格页未变化' }
+      return
+    }
+    if (!response.ok) throw new Error('official pricing page returned ' + response.status)
+    const parsed = parseOfficialPricingHtml(await response.text())
+    applyOfficialPricing(parsed, response)
+  } catch (error) {
+    pricingSync = {
+      ...pricingSync,
+      status: pricingSync.checkedAt > 0 ? 'review-required' : 'offline',
+      checkedAt: Date.now(),
+      message: pricingSync.checkedAt > 0 ? '官方价格页结构有变化，需要复核' : '官方价格页暂时不可用，使用内置规则',
+    }
+    if (logger && typeof logger.warn === 'function') logger.warn('dsh-wallet: official pricing sync unavailable')
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+export function pricingSnapshot() {
+  return {
+    status: pricingSync.status,
+    source: pricingSync.source,
+    checkedAt: pricingSync.checkedAt,
+    ruleVersion: pricingSync.ruleVersion,
+    message: pricingSync.message,
+    modelCount: Object.keys(activePricePolicies[activePricePolicies.length - 1].models).length,
+    peakWindows: peakWindows.map((window) => ({ ...window })),
+    weekendOffPeakSince,
+  }
+}
+
+function readPackageManifest(path) {
+  try {
+    const manifest = JSON.parse(readFileSync(path, 'utf8'))
+    return manifest !== null && typeof manifest === 'object' ? manifest : null
+  } catch {
+    return null
+  }
+}
+
+function detectHostManifest() {
+  const starts = [
+    typeof process.cwd === 'function' ? process.cwd() : null,
+    typeof process.argv?.[1] === 'string' ? dirname(process.argv[1]) : null,
+  ].filter(Boolean)
+  const seen = new Set()
+  for (const start of starts) {
+    let current = start
+    for (let depth = 0; depth < 10 && current !== dirname(current); depth += 1) {
+      if (seen.has(current)) break
+      seen.add(current)
+      const manifest = readPackageManifest(join(current, 'package.json'))
+      if (manifest && ['@deepseek-ai/dsh-root', '@deepseek-ai/dsh'].includes(manifest.name)) {
+        return { name: manifest.name, version: typeof manifest.version === 'string' ? manifest.version : null }
+      }
+      current = dirname(current)
+    }
+  }
+  return { name: null, version: null }
+}
+
+function compareVersions(left, right) {
+  const parse = (value) => {
+    const match = typeof value === 'string' && value.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/)
+    if (match === null) return null
+    return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]), pre: match[4] || '' }
+  }
+  const a = parse(left)
+  const b = parse(right)
+  if (a === null || b === null) return null
+  for (const key of ['major', 'minor', 'patch']) {
+    if (a[key] !== b[key]) return a[key] > b[key] ? 1 : -1
+  }
+  if (a.pre === b.pre) return 0
+  if (a.pre === '') return 1
+  if (b.pre === '') return -1
+  return a.pre.localeCompare(b.pre, 'en', { numeric: true })
+}
+
+const HOST_MANIFEST = detectHostManifest()
+
+export function hostHealthSnapshot() {
+  const hostVersion = HOST_MANIFEST.version
+  const comparison = compareVersions(hostVersion, MIN_HOST_VERSION)
+  const compatibility = comparison === null
+    ? { status: 'unknown', minimumVersion: MIN_HOST_VERSION, message: '无法读取 Harness 版本' }
+    : comparison >= 0
+      ? { status: 'compatible', minimumVersion: MIN_HOST_VERSION, message: '满足插件最低版本要求' }
+      : { status: 'upgrade-recommended', minimumVersion: MIN_HOST_VERSION, message: 'Harness 版本低于插件建议版本' }
+  return {
+    name: HOST_MANIFEST.name,
+    version: hostVersion,
+    detected: hostVersion !== null,
+    compatibility,
+  }
+}
+
+export function healthSnapshot() {
+  return {
+    ok: true,
+    plugin: { name: 'deepseek-harness-wallet', version: PLUGIN_VERSION },
+    host: hostHealthSnapshot(),
+    pricing: pricingSnapshot(),
+    accounts: accountStorageSnapshot(),
+    runtime: { node: process.version, platform: process.platform },
+  }
+}
+
 export function ratesFor(model, atMs) {
   let entry
-  for (const policy of PRICE_POLICIES) {
+  for (const policy of activePricePolicies) {
     // Own-property check: a model named `__proto__`/`toString` would otherwise
     // resolve to an Object.prototype member and produce NaN costs.
     if (atMs >= policy.since && Object.hasOwn(policy.models, model)) entry = policy
@@ -289,9 +528,127 @@ function scheduleSave(logger) {
 
 // ---------------------------------------------------------------------------
 // Multi-account store (accounts.json): list, add, remove, hot-switch.
-// Keys are stored plaintext next to .credentials.yaml, matching the harness's
-// own credential storage; the API surface only ever exposes masked keys.
+// Keys remain available in memory for the active LLM/balance request, but are
+// encrypted at rest. Windows uses the current user's DPAPI; other platforms
+// use an owner-only AES-GCM key file as a best-effort local fallback.
 // ---------------------------------------------------------------------------
+
+const WINDOWS_DPAPI_PROTECT = [
+  '$ErrorActionPreference = "Stop"',
+  'Add-Type -AssemblyName System.Security',
+  '$encoded = [Console]::In.ReadToEnd().Trim()',
+  '$bytes = [Convert]::FromBase64String($encoded)',
+  '$protected = [Security.Cryptography.ProtectedData]::Protect($bytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)',
+  '[Console]::Out.Write([Convert]::ToBase64String($protected))',
+].join(';')
+const WINDOWS_DPAPI_UNPROTECT = [
+  '$ErrorActionPreference = "Stop"',
+  'Add-Type -AssemblyName System.Security',
+  '$encoded = [Console]::In.ReadToEnd().Trim()',
+  '$protected = [Convert]::FromBase64String($encoded)',
+  '$bytes = [Security.Cryptography.ProtectedData]::Unprotect($protected, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)',
+  '[Console]::Out.Write([Convert]::ToBase64String($bytes))',
+].join(';')
+let fallbackEncryptionKey = null
+let accountStorageScheme = process.platform === 'win32' ? 'windows-dpapi' : 'aes-gcm-file-key'
+let accountStorageError = null
+
+function runWindowsDpapi(operation, value) {
+  if (process.platform !== 'win32') return null
+  const result = spawnSync(
+    'powershell.exe',
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', operation === 'protect' ? WINDOWS_DPAPI_PROTECT : WINDOWS_DPAPI_UNPROTECT],
+    {
+      input: Buffer.from(value, 'utf8').toString('base64'),
+      encoding: 'utf8',
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+    },
+  )
+  if (result.error || result.status !== 0) return null
+  const output = String(result.stdout || '').trim()
+  return output === '' ? null : output
+}
+
+function getFallbackEncryptionKey() {
+  if (fallbackEncryptionKey !== null) return fallbackEncryptionKey
+  try {
+    mkdirSync(dirname(ACCOUNTS_KEY_PATH), { recursive: true, mode: 0o700 })
+    if (existsSync(ACCOUNTS_KEY_PATH)) {
+      const existing = readFileSync(ACCOUNTS_KEY_PATH)
+      if (existing.length !== 32) throw new Error('account encryption key has an invalid length')
+      fallbackEncryptionKey = existing
+    } else {
+      fallbackEncryptionKey = randomBytes(32)
+      writeFileSync(ACCOUNTS_KEY_PATH, fallbackEncryptionKey, { mode: 0o600 })
+      chmodSync(ACCOUNTS_KEY_PATH, 0o600)
+    }
+    return fallbackEncryptionKey
+  } catch {
+    accountStorageError = 'account-encryption-key-unavailable'
+    return null
+  }
+}
+
+function protectApiKey(apiKey) {
+  const dpapi = runWindowsDpapi('protect', apiKey)
+  if (dpapi !== null) {
+    accountStorageScheme = 'windows-dpapi'
+    accountStorageError = null
+    return { version: ACCOUNTS_CRYPTO_VERSION, scheme: 'windows-dpapi', payload: dpapi }
+  }
+  const key = getFallbackEncryptionKey()
+  if (key === null) return null
+  try {
+    const iv = randomBytes(12)
+    const cipher = createCipheriv('aes-256-gcm', key, iv)
+    const ciphertext = Buffer.concat([cipher.update(apiKey, 'utf8'), cipher.final()])
+    accountStorageScheme = 'aes-gcm-file-key'
+    return {
+      version: ACCOUNTS_CRYPTO_VERSION,
+      scheme: 'aes-gcm-file-key',
+      iv: iv.toString('base64'),
+      tag: cipher.getAuthTag().toString('base64'),
+      payload: ciphertext.toString('base64'),
+    }
+  } catch {
+    accountStorageError = 'account-encryption-failed'
+    return null
+  }
+}
+
+function unprotectApiKey(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return ''
+  if (value.version !== ACCOUNTS_CRYPTO_VERSION || typeof value.scheme !== 'string' || typeof value.payload !== 'string') return ''
+  if (value.scheme === 'windows-dpapi') {
+    const decoded = runWindowsDpapi('unprotect', value.payload)
+    if (decoded === null) accountStorageError = 'account-decryption-failed'
+    else {
+      try { return Buffer.from(decoded, 'base64').toString('utf8') } catch { /* fall through */ }
+    }
+    return ''
+  }
+  if (value.scheme !== 'aes-gcm-file-key' || typeof value.iv !== 'string' || typeof value.tag !== 'string') return ''
+  const key = getFallbackEncryptionKey()
+  if (key === null) return ''
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(value.iv, 'base64'))
+    decipher.setAuthTag(Buffer.from(value.tag, 'base64'))
+    return Buffer.concat([decipher.update(Buffer.from(value.payload, 'base64')), decipher.final()]).toString('utf8')
+  } catch {
+    accountStorageError = 'account-decryption-failed'
+    return ''
+  }
+}
+
+export function accountStorageSnapshot() {
+  return {
+    encryptedAtRest: true,
+    scheme: accountStorageScheme,
+    status: accountStorageError === null ? 'ready' : 'error',
+    error: accountStorageError,
+  }
+}
 
 function emptyAccounts() {
   return { version: ACCOUNTS_VERSION, accounts: [], activeId: null }
@@ -305,7 +662,9 @@ export function normalizeAccountsData(value) {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue
     const id = typeof raw.id === 'string' && raw.id !== '' ? raw.id : null
     const name = typeof raw.name === 'string' ? raw.name.trim() : ''
-    const apiKey = typeof raw.apiKey === 'string' ? raw.apiKey : ''
+    // Accept the v1 plaintext shape once so an existing installation can be
+    // migrated on its next save; new writes use apiKeyEncrypted only.
+    const apiKey = typeof raw.apiKey === 'string' ? raw.apiKey : unprotectApiKey(raw.apiKeyEncrypted)
     if (id === null || name === '' || apiKey === '') continue
     accounts.push({
       id,
@@ -323,14 +682,20 @@ export function normalizeAccountsData(value) {
 
 function loadAccounts() {
   try {
-    return normalizeAccountsData(JSON.parse(readFileSync(ACCOUNTS_PATH, 'utf8')))
+    const raw = JSON.parse(readFileSync(ACCOUNTS_PATH, 'utf8'))
+    const normalized = normalizeAccountsData(raw)
+    const legacyPlaintext = Array.isArray(raw?.accounts)
+      && raw.accounts.some((account) => account && typeof account.apiKey === 'string')
+    return { accounts: normalized, migrated: legacyPlaintext || raw?.version !== ACCOUNTS_VERSION }
   } catch {
-    return emptyAccounts()
+    return { accounts: emptyAccounts(), migrated: false }
   }
 }
 
 let accountsSaveTimer = null
-let accounts = loadAccounts()
+const loadedAccounts = loadAccounts()
+let accounts = loadedAccounts.accounts
+let accountsNeedsSave = loadedAccounts.migrated
 
 function persistAccounts(logger) {
   if (accountsSaveTimer !== null) {
@@ -340,12 +705,24 @@ function persistAccounts(logger) {
   try {
     mkdirSync(dirname(ACCOUNTS_PATH), { recursive: true, mode: 0o700 })
     const tmp = ACCOUNTS_PATH + '.tmp'
-    // This file holds plaintext API keys: owner-only, never group/world readable.
-    writeFileSync(tmp, JSON.stringify(accounts), { mode: 0o600 })
+    const encryptedAccounts = accounts.accounts.map((account) => {
+      const apiKeyEncrypted = protectApiKey(account.apiKey)
+      if (apiKeyEncrypted === null) throw new Error('account encryption unavailable')
+      return {
+        id: account.id,
+        name: account.name,
+        apiKeyEncrypted,
+        createdAt: account.createdAt,
+      }
+    })
+    writeFileSync(tmp, JSON.stringify({ version: ACCOUNTS_VERSION, accounts: encryptedAccounts, activeId: accounts.activeId }), { mode: 0o600 })
+    chmodSync(tmp, 0o600)
     renameSync(tmp, ACCOUNTS_PATH)
+    accountsNeedsSave = false
   } catch (error) {
+    accountStorageError = accountStorageError || 'account-encryption-failed'
     if (logger && typeof logger.warn === 'function') {
-      logger.warn('dsh-wallet: failed to persist accounts: ' + String(error))
+      logger.warn('dsh-wallet: failed to persist encrypted accounts')
     }
   }
 }
@@ -701,11 +1078,11 @@ function snapshotView(sessionId) {
     pricingWindows: {
       timezone: 'Asia/Shanghai',
       offsetMinutes: 480,
-      windows: PEAK_WINDOWS.map(w => ({ startHour: w.startHour, endHour: w.endHour })),
+      windows: peakWindows.map(w => ({ startHour: w.startHour, endHour: w.endHour })),
       offPeakRate: OFF_PEAK_RATE,
       isPeak: isBeijingPeak(now),
-      weekendOffPeak: now >= WEEKEND_OFF_PEAK_SINCE && isBeijingWeekend(now),
-      weekendOffPeakSince: WEEKEND_OFF_PEAK_SINCE,
+      weekendOffPeak: now >= weekendOffPeakSince && isBeijingWeekend(now),
+      weekendOffPeakSince,
     },
     accounts: {
       activeId: accounts.activeId,
@@ -768,6 +1145,7 @@ export function apply(ctx, config) {
     storeNeedsSave = false
     scheduleSave(ctx.logger)
   }
+  if (accountsNeedsSave) scheduleAccountsSave(ctx.logger)
   // Thresholds live ONLY in the persisted store; an explicit row config may
   // still override the CNY line for power users, but the bundle patch sets none.
   if (Number.isFinite(config.threshold)) {
@@ -818,12 +1196,40 @@ export function apply(ctx, config) {
   if (typeof balanceTimer.unref === 'function') balanceTimer.unref()
 
   ctx.effect(() => {
+    const first = setTimeout(() => void syncOfficialPricing(ctx.logger), 1000)
+    const timer = setInterval(() => void syncOfficialPricing(ctx.logger), PRICING_SYNC_INTERVAL_MS)
+    if (typeof first.unref === 'function') first.unref()
+    if (typeof timer.unref === 'function') timer.unref()
+    return () => {
+      clearTimeout(first)
+      clearInterval(timer)
+    }
+  }, 'dsh-wallet: official pricing sync')
+
+  ctx.effect(() => {
     const disposeSnapshot = ctx.webServer.register({
       kind: 'exact',
       path: '/api/wallet/snapshot',
       handler: (req, res) => {
         if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
         return json(res, 200, snapshotView(sessionParam(req)))
+      },
+    })
+    const disposeHealth = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/wallet/health',
+      handler: (req, res) => {
+        if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        return json(res, 200, healthSnapshot())
+      },
+    })
+    const disposePricingRefresh = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/wallet/pricing/refresh',
+      handler: async (req, res) => {
+        if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        await syncOfficialPricing(ctx.logger)
+        return json(res, 200, { ok: true, pricing: pricingSnapshot() })
       },
     })
     const disposeThreshold = ctx.webServer.register({
@@ -966,6 +1372,8 @@ export function apply(ctx, config) {
     })
     return () => {
       disposeSnapshot()
+      disposeHealth()
+      disposePricingRefresh()
       disposeThreshold()
       disposeRefresh()
       disposeClear()

@@ -23,7 +23,9 @@
 ```
 
 - **Official DeepSeek** — live balance (60s global refresh with fast boot retries), an estimated current-session cost (not an official bill) locked to the price active for each usage event, including the 2026-08-17 peak/off-peak rollout, and token breakdown.
+- **Vision model accounting** — `deepseek-v4-flash-vision-exp` is priced like V4 Flash; image tokens reported by the Harness are included with text tokens.
 - **v4 peak/off-peak ring clock** — a resident 24-hour sidebar footer widget for `v4-flash` and `v4-pro`, indicating real-time pricing windows (peak vs. 50% discount off-peak), countdown to the next switch, and optional desktop switch notifications. Weekdays use 09:00–12:00 and 14:00–18:00 Beijing time; Saturday and Sunday are all-day off-peak from 2026-08-23. Other models keep their flat rates.
+- **Official pricing sync** — periodically checks the official DeepSeek pricing page, applies only a fully validated table, and visibly keeps the built-in rules when the page is unavailable or changes format.
 - **Third-party total** — current-session tokens (input / cache read / output). No balance guessing, no cost math, zero configuration.
 - **Provider classification** — observed wrapper routes appear in the settings page; opted-in routes join the official token/cost bucket and are priced with the official table.
 - **Click the chip** to open the detail panel: correctly formatted per-currency balances, cost and token splits, a freely editable low-balance threshold for the active account and currency (two decimals, persisted per account; alerts never mix currencies), manual refresh, and a jump to the official recharge page (first click shows the domain for confirmation — anti-phishing).
@@ -40,7 +42,7 @@
 - Open the wallet panel → **Account Management（账户管理）** to add accounts (name + API key), switch the active one, or remove them.
 - The first account added becomes the active account automatically and is synced into the credentials seam.
 - Switching prompts a confirmation because it changes **LLM billing** for subsequent requests: the switch writes the account key into the credentials seam (`credentials.set('DEEPSEEK_API_KEY', ...)`), and since the llm-deepseek provider route resolves that reference per request, the very next LLM call is billed with the new account — no restart needed.
-- Account keys are stored in plaintext in `$DSH_HOME/storages/accounts.json`; the UI only shows masked keys. Treat the DSH data directory as a local credential store and protect access to it. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
+- Account keys are encrypted at rest in `$DSH_HOME/storages/accounts.json`: Windows uses the current user's DPAPI; other platforms use an owner-only AES-GCM key file. The UI only shows masked keys. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
 - Session usage estimates follow the active account's currency: USD-settled accounts show `本约 $x`, converted from the CNY price table at the vendor's long-standing list ratio (not a live FX rate); CNY accounts show `本场 ¥x`. These are local estimates, not an official invoice.
 - If `DEEPSEEK_API_KEY` is supplied by the launching environment, switching is refused with a clear error (the credentials provider rejects shadowed writes) — unset it in your shell to enable switching.
 
@@ -81,7 +83,7 @@ Restart `dsh web`, then hard-refresh the page.
 
 ## Quick use
 
-1. Click the wallet or peak/off-peak card to open its control panel.
+1. Click the wallet or peak/off-peak card to open its control panel; open the Harness settings card for health and compatibility checks.
 2. Choose horizontal or vertical layout, then use the scale control between 100% and 120%.
 3. Turn the official recharge button off when you need a smaller card; official and third-party rows can also be shown independently.
 4. Drag the card to any open area. If it is hard to find after a layout change, use **Reset/Dock（归位/停靠）** in the panel to return it to the sidebar.
@@ -139,7 +141,7 @@ For buildable DSH hosts, the npm package and repository include a versioned [Age
 | --- | --- |
 | Token accounting | Listens to the `llm/stream` event and buckets per session and provider: `deepseek-official` plus explicitly opted-in wrapper routes use the official bucket; other providers stay third-party; each usage event also locks its contemporaneous official price, so multiple sessions and pricing windows never mix. |
 | Balance | The wallet plugin itself sends the active key directly only to the official `/user/balance` endpoint. When multi-account switching is enabled, the selected key is also written into the DSH credentials seam; DSH may then use it for subsequent model requests. |
-| Accounts | Keys live in `$DSH_HOME/storages/accounts.json` in plaintext, matching the harness's own credential storage. The UI only shows masked keys, and switching writes the chosen key into the credentials seam for subsequent LLM billing. Protect the DSH data directory as you would any local credential store. |
+| Accounts | Keys live encrypted in `$DSH_HOME/storages/accounts.json`: Windows uses current-user DPAPI, while other platforms use an owner-only AES-GCM key file. The UI only shows masked keys, and switching writes the chosen key into the credentials seam for subsequent LLM billing. Protect the DSH data directory as you would any local credential store. |
 | Session log | The plugin writes no events; its data lives in `$DSH_HOME/storages/wallet.json`. |
 | Local settings | Layout, scale, visibility, reminder, and panel settings stay in browser-compatible local storage. |
 | Permanent deletion | Opt-in and host-gated. The wallet never advertises the action unless the host implements the matching session deletion path. |
@@ -151,10 +153,11 @@ For buildable DSH hosts, the npm package and repository include a versioned [Age
 CNY per 1M tokens, curated from official announcements (cache writes are not billed):
 
 - Since 2025-02-09 — deepseek-chat 2/8 (cache read 0.5), deepseek-reasoner 4/16 (cache read 1)
-- Since 2026-04-24 — v4-flash 1/2 (cache read 0.02), v4-pro 3/6 (cache read 0.025)
+- Since 2026-04-24 — v4-flash 1/2 (cache read 0.02), v4-pro 3/6 (cache read 0.025), v4-flash-vision-exp 1/2 (cache read 0.02)
 - Since 2026-08-17 00:00 Beijing — peak/off-peak pricing for the v4 models (peak windows Beijing 09:00–12:00 / 14:00–18:00; off-peak is half the peak rate):
   - v4-flash (off-peak / peak): cache read 0.05 / 0.10, input 1.5 / 3, output 4.5 / 9
   - v4-pro (off-peak / peak): cache read 0.15 / 0.30, input 4.5 / 9, output 13.5 / 27
+  - v4-flash-vision-exp (off-peak / peak): cache read 0.05 / 0.10, input 1.5 / 3, output 4.5 / 9
 - Since 2026-08-23 00:00 Beijing — Saturday and Sunday are no longer split into peak/off-peak windows; weekend calls use the off-peak rates all day. Weekday peak windows remain 09:00–12:00 and 14:00–18:00.
 
 deepseek-chat and deepseek-reasoner keep their flat rates. Each usage event is priced when it arrives; upgrading from 0.1.2 migrates legacy counters once using the then-current rate. Costs are estimates; the API-returned balance is authoritative.
