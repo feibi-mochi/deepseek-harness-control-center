@@ -322,8 +322,8 @@ test('documentation distinguishes host-gated deletion from clearing wallet data'
 })
 
 test('README heroes stay compact while product overviews remain structured below features', () => {
-  const englishReadme = readProjectFile('README.md')
-  const chineseReadme = readProjectFile('docs/i18n/README.zh-CN.md')
+  const englishReadme = readProjectFile('README.md').replaceAll('\r\n', '\n')
+  const chineseReadme = readProjectFile('docs/i18n/README.zh-CN.md').replaceAll('\r\n', '\n')
   const englishHero = englishReadme.split('## What it does', 1)[0]
   const chineseHero = chineseReadme.split('## 能做什么', 1)[0]
   assert.ok(englishHero.length < 1800, 'English hero must remain quickly scannable')
