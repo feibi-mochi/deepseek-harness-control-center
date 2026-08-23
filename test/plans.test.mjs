@@ -70,8 +70,8 @@ test('Z.ai quota payload normalizes 5-hour tokens and monthly tool usage', () =>
   assert.equal(snapshot.id, 'zai-cn')
   assert.equal(snapshot.level, 'pro')
   assert.deepEqual(snapshot.limits, [
-    { id: 'tokens-5h', kind: 'tokens', window: '5h', percentage: 100, used: null, total: null, remaining: null, resetAt: null },
-    { id: 'tools-month', kind: 'tools', window: 'month', percentage: 25, used: 250, total: 1000, remaining: 750, resetAt: atMs + 86_400_000 },
+    { id: 'tokens-5h', kind: 'tokens', window: '5h', usedPercentage: 100, remainingPercentage: 0, used: null, total: null, remaining: null, resetAt: null },
+    { id: 'tools-month', kind: 'tools', window: 'month', usedPercentage: 25, remainingPercentage: 75, used: 250, total: 1000, remaining: 750, resetAt: atMs + 86_400_000 },
   ])
   assert.throws(() => normalizePlanPayload(planAdapterById('zai-cn'), { success: true, data: { limits: [] } }, atMs), /invalid-plan-response/)
 })
@@ -92,7 +92,8 @@ test('persisted plan snapshots are bounded and unknown adapters are discarded', 
     attacker: { fetchedAt: atMs, limits: [{ id: 'tokens-5h', percentage: 1 }] },
   }, atMs)
   assert.deepEqual(Object.keys(cache), ['zai-cn'])
-  assert.equal(cache['zai-cn'].limits[0].percentage, 0)
+  assert.equal(cache['zai-cn'].limits[0].usedPercentage, 0)
+  assert.equal(cache['zai-cn'].limits[0].remainingPercentage, 100)
   assert.equal(JSON.stringify(cache).includes('must-not-survive'), false)
   assert.equal(JSON.stringify(cache).includes('hidden'), false)
 })

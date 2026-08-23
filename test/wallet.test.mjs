@@ -2846,8 +2846,8 @@ test('plan quota card renders official windows, hides credentials, and stays col
         level: 'pro',
         fetchedAt: Date.UTC(2026, 7, 23, 12),
         limits: [
-          { id: 'tokens-5h', kind: 'tokens', window: '5h', percentage: 42, used: null, total: null, remaining: null, resetAt: null },
-          { id: 'tools-month', kind: 'tools', window: 'month', percentage: 93, used: 93, total: 100, remaining: 7, resetAt: Date.UTC(2026, 8, 1, 0) },
+          { id: 'tokens-5h', kind: 'tokens', window: '5h', usedPercentage: 42, remainingPercentage: 58, used: null, total: null, remaining: null, resetAt: null },
+          { id: 'tools-month', kind: 'tools', window: 'month', usedPercentage: 93, remainingPercentage: 7, used: 93, total: 100, remaining: 7, resetAt: Date.UTC(2026, 8, 1, 0) },
         ],
       },
     ],
@@ -2871,13 +2871,23 @@ test('plan quota card renders official windows, hides credentials, and stays col
   assert.match(text, /套餐额度/)
   assert.match(text, /5 小时窗口/, 'the 5-hour token window must be labeled')
   assert.match(text, /1 个月窗口/, 'the monthly tool window must be labeled')
-  assert.match(text, /42%/, 'token usage percentage must render')
+  assert.match(text, /剩余 58%/, 'remaining quota must be the primary percentage')
+  assert.match(text, /已用 42%/, 'used quota remains visible as secondary context')
   assert.match(text, /未配置/, 'an unconfigured plan must be reported instead of guessed')
   assert.match(text, /open\.bigmodel\.cn/, 'each source must name the official domain it queried')
   assert.doesNotMatch(text, /¥|\$/, 'subscription quota must never be converted into currency balance')
   const bar = findElement(tree, (element) => element.props && element.props.role === 'progressbar')
   assert.ok(bar, 'quota windows render as accessible progress bars')
-  assert.equal(bar.props['aria-valuenow'], 42)
+  assert.equal(bar.props['aria-valuenow'], 58)
+  const bars = []
+  ;(function collectBars(node) {
+    if (node === null || node === undefined || typeof node !== 'object') return
+    if (Array.isArray(node)) { node.forEach(collectBars); return }
+    if (node.props && node.props.role === 'progressbar') bars.push(node)
+    collectBars(node.props && node.props.children)
+  })(tree)
+  assert.equal(bars[1].props['aria-valuenow'], 7)
+  assert.match(String(bars[1].props.children.props.className), /critical/, '20% or less remaining uses the critical color')
 
   const compactRenderer = createHookRenderer()
   const compactBundle = loadClientBundle(compactRenderer.React, { fetch: mockFetch })
@@ -2912,8 +2922,8 @@ test('composer wallet follows the selected provider instead of showing DeepSeek 
   assert.match(source, /if \(providerMode\.kind !== 'deepseek'\) return null/, 'the peak clock disappears outside DeepSeek')
   assert.match(source, /if \(modelAware && !\/\^deepseek-v4-\//, 'the peak clock is limited to the V4 pricing family')
   assert.match(source, /activeProviderMode\.kind === 'zai'/, 'the composer chip has a Z.ai-specific presentation')
-  assert.match(source, /'5h ' \+ planTokenPercent/, 'the Z.ai chip shows the five-hour quota')
-  assert.match(source, /'MCP ' \+ planToolPercent/, 'the Z.ai chip shows monthly tool quota')
+  assert.match(source, /'5h 剩' \+ planTokenRemaining/, 'the Z.ai chip shows remaining five-hour quota')
+  assert.match(source, /'MCP 剩' \+ planToolRemaining/, 'the Z.ai chip shows remaining monthly tool quota')
   assert.match(source, /showDeepSeek \? React\.createElement\('button'/, 'recharge is gated by the selected provider')
   assert.match(source, /modelDirectories\.directoryFor\(sessionId\)/, 'the chip reads the host model-selection service')
   assert.match(source, /lowNoticeRef\.current\.close\(\)/, 'leaving DeepSeek closes a stale low-balance notice')
