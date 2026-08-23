@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,11 +15,13 @@ import {
   PRICE_POLICIES,
   addOfficialUsage,
   accountStorageSnapshot,
+  __testing as hostTesting,
   apply as applyWallet,
   balanceCurrency,
   healthSnapshot,
   isBeijingPeak,
   parseOfficialPricingHtml,
+  pricingWindowSnapshot,
   ratesFor,
   costOf,
   normalizeStoreData,
@@ -236,7 +238,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.3.0')
+  assert.equal(pkg.version, '0.3.1')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -343,7 +345,7 @@ test('README heroes stay compact while product overviews remain structured below
 })
 
 test('policy table: since dates match the documented timeline', () => {
-  assert.equal(PRICE_POLICIES.length, 3)
+  assert.equal(PRICE_POLICIES.length, 4)
   // 2025-02-09: deepseek-chat / deepseek-reasoner.
   assert.equal(PRICE_POLICIES[0].since, Date.UTC(2025, 1, 9))
   // 2026-04-24: v4 flat rates (V4 preview launch).
@@ -351,8 +353,10 @@ test('policy table: since dates match the documented timeline', () => {
   // 2026-08-17 00:00 Beijing = 2026-08-16T16:00Z.
   assert.equal(PRICE_POLICIES[2].since, Date.UTC(2026, 7, 16, 16))
   assert.equal(PRICE_POLICIES[2].peakOffPeak, true)
-  assert.deepEqual(PRICE_POLICIES[1].models['deepseek-v4-flash-vision-exp'], { cacheHit: 0.02, input: 1, output: 2 })
-  assert.deepEqual(PRICE_POLICIES[2].models['deepseek-v4-flash-vision-exp'], { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] })
+  // 2026-08-21 00:00 Beijing = 2026-08-20T16:00Z: Vision Exp release.
+  assert.equal(PRICE_POLICIES[3].since, Date.UTC(2026, 7, 20, 16))
+  assert.equal(PRICE_POLICIES[3].peakOffPeak, true)
+  assert.deepEqual(PRICE_POLICIES[3].models['deepseek-v4-flash-vision-exp'], { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] })
 })
 
 test('official pricing parser reads vision rates and the weekend rule', () => {
@@ -375,11 +379,38 @@ test('official pricing parser reads vision rates and the weekend rule', () => {
   assert.match(parsed.ruleVersion, /^official-[0-9a-f]{12}$/)
 })
 
+test('official pricing parser accepts the current weekday-only wording', () => {
+  const html = `<table>
+    <tr><td>模型</td><td>deepseek-v4-flash</td><td>deepseek-v4-pro</td><td>deepseek-v4-flash-vision-exp</td></tr>
+    <tr><td>百万tokens输入（缓存命中）</td><td>空闲时段</td><td>0.05元</td><td>0.15元</td><td>0.05元</td></tr>
+    <tr><td>高峰时段</td><td>0.10元</td><td>0.30元</td><td>0.10元</td></tr>
+    <tr><td>百万tokens输入（缓存未命中）</td><td>空闲时段</td><td>1.5元</td><td>4.5元</td><td>1.5元</td></tr>
+    <tr><td>高峰时段</td><td>3.0元</td><td>9.0元</td><td>3.0元</td></tr>
+    <tr><td>百万tokens输出</td><td>空闲时段</td><td>4.5元</td><td>13.5元</td><td>4.5元</td></tr>
+    <tr><td>高峰时段</td><td>9.0元</td><td>27.0元</td><td>9.0元</td></tr>
+  </table>
+  <p>空闲时段价格为高峰时段价格的一半。高峰时段为北京时间周一至周五 9:00 - 12:00、14:00 - 18:00（其余为空闲时段）。</p>${'x'.repeat(500)}`
+  const parsed = parseOfficialPricingHtml(html)
+  assert.deepEqual(parsed.peakWindows, [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }])
+  assert.equal(parsed.weekendOffPeakSince, bj(2026, 8, 23, 0, 0))
+})
+
+test('portable AES-GCM account encryption round-trips and rejects tampering', () => {
+  const key = Buffer.alloc(32, 7)
+  const iv = Buffer.alloc(12, 3)
+  const encrypted = hostTesting.encryptApiKeyAes('sk-portable-1234567890', key, iv)
+  assert.equal(encrypted.scheme, 'aes-gcm-file-key')
+  assert.doesNotMatch(JSON.stringify(encrypted), /sk-portable/)
+  assert.equal(hostTesting.decryptApiKeyAes(encrypted, key), 'sk-portable-1234567890')
+  const tampered = { ...encrypted, tag: Buffer.alloc(16, 9).toString('base64') }
+  assert.throws(() => hostTesting.decryptApiKeyAes(tampered, key))
+})
+
 test('health snapshot exposes compatibility, pricing sync, and encrypted account status without secrets', () => {
   const health = healthSnapshot()
   assert.equal(health.ok, true)
   assert.equal(health.plugin.name, 'deepseek-harness-wallet')
-  assert.equal(typeof health.plugin.version, 'string')
+  assert.equal(health.plugin.version, JSON.parse(readProjectFile('package.json')).version)
   assert.equal(typeof health.host.compatibility.status, 'string')
   assert.equal(typeof health.pricing.status, 'string')
   assert.equal(health.accounts.encryptedAtRest, true)
@@ -410,12 +441,33 @@ test('isBeijingPeak: weekends become all-day off-peak from 2026-08-23', () => {
   assert.equal(isBeijingPeak(bj(2026, 8, 31, 10, 0)), true, 'Monday resumes weekday peak pricing')
 })
 
+test('pricing snapshot hides peak windows on weekends for stale-client safety', () => {
+  const sunday = pricingWindowSnapshot(bj(2026, 8, 23, 11, 23))
+  assert.equal(sunday.weekendOffPeak, true)
+  assert.equal(sunday.isPeak, false)
+  assert.deepEqual(sunday.windows, [])
+  const monday = pricingWindowSnapshot(bj(2026, 8, 24, 10, 0))
+  assert.equal(monday.weekendOffPeak, false)
+  assert.equal(monday.isPeak, true)
+  assert.deepEqual(monday.windows, [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }])
+})
+
 test('ratesFor: flat v4 rates before the peak/off-peak rollout', () => {
   assert.deepEqual(ratesFor('deepseek-v4-flash', bj(2026, 8, 16, 23, 59)), {
     cacheHit: 0.02, input: 1, output: 2,
   })
   assert.deepEqual(ratesFor('deepseek-v4-pro', bj(2026, 8, 16, 23, 59)), {
     cacheHit: 0.025, input: 3, output: 6,
+  })
+})
+
+test('ratesFor: vision model starts at its 2026-08-21 launch boundary', () => {
+  assert.equal(ratesFor('deepseek-v4-flash-vision-exp', bj(2026, 8, 20, 23, 59)), null)
+  assert.deepEqual(ratesFor('deepseek-v4-flash-vision-exp', bj(2026, 8, 21, 0, 0)), {
+    cacheHit: 0.05, input: 1.5, output: 4.5,
+  })
+  assert.deepEqual(ratesFor('deepseek-v4-flash-vision-exp', bj(2026, 8, 21, 10, 0)), {
+    cacheHit: 0.1, input: 3, output: 9,
   })
 })
 
@@ -1061,7 +1113,10 @@ test('compatibility adapter centralizes desktop bridges and storage fallback', a
   assert.equal(adapter.storage.getItem('setting'), '123')
   adapter.storage.removeItem('setting')
   assert.equal(adapter.storage.getItem('setting'), null)
-  assert.equal(adapter.notify('完成', { body: '测试', tag: 'one' }), handle)
+  const wrappedHandle = adapter.notify('完成', { body: '测试', tag: 'one' })
+  assert.notEqual(wrappedHandle, handle)
+  assert.equal(wrappedHandle.delegate, handle)
+  assert.equal(typeof wrappedHandle.close, 'function')
   assert.deepEqual(
     notices.map(({ title, body, tag, requireInteraction }) => ({ title, body, tag, requireInteraction })),
     [{ title: '完成', body: '测试', tag: 'one', requireInteraction: false }],
@@ -1090,6 +1145,29 @@ test('desktop notification bridges may be fire-and-forget and expose native call
   assert.equal(typeof handle.close, 'function')
   assert.equal(payload.requireInteraction, true)
   assert.equal(await adapter.requestNotificationPermission(), 'granted')
+})
+
+test('a synchronous desktop notification handle stays connected to payload callbacks', () => {
+  let payload
+  const delegate = { closeCalls: 0, close() { this.closeCalls += 1 }, onclick: null, onclose: null }
+  const adapter = loadClientBundle(createHookRenderer().React).exports.__testing.createCompatibilityAdapter({
+    __DSH_WALLET_ADAPTER__: {
+      notify(value) { payload = value; return delegate },
+    },
+  })
+  const handle = adapter.notify('完成', { body: '桌面回调' })
+  let clicked = 0
+  let closed = 0
+  handle.onclick = () => { clicked += 1 }
+  handle.onclose = () => { closed += 1 }
+  payload.onClick()
+  assert.equal(clicked, 1, 'payload click reaches the wrapper returned to wallet code')
+  delegate.onclick()
+  assert.equal(clicked, 2, 'native handle onclick also reaches the wallet callback')
+  payload.onClose()
+  assert.equal(closed, 1)
+  handle.close()
+  assert.equal(delegate.closeCalls, 0, 'already-closed delegates are not closed twice')
 })
 
 test('an asynchronous desktop notification bridge forwards events and falls back on failure', async () => {
@@ -1342,7 +1420,7 @@ test('wallet HTTP routes enforce methods, bounded inputs, and session identifier
           return () => routes.delete(definition.path)
         },
       },
-    }, {})
+    }, { pricingSync: false })
 
     async function call(path, method, body, url = path) {
       const handler = routes.get(path)
@@ -1658,7 +1736,7 @@ function installWalletRouteHarness(mod, credentials) {
       },
     },
   }
-  mod.apply(ctx, {})
+  mod.apply(ctx, { pricingSync: false })
   async function call(path, method, body, url = path) {
     const handler = routes.get(path)
     assert.equal(typeof handler, 'function', `missing route ${path}`)
@@ -1752,6 +1830,111 @@ test('account persistence encrypts API keys instead of writing plaintext', async
     assert.equal(stored.version, 2)
     assert.equal(stored.accounts[0].apiKeyEncrypted.version, 1)
     assert.equal((await harness.call('/api/wallet/health', 'GET')).json.accounts.encryptedAtRest, true)
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 100))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('encrypted accounts survive a full module reload on the current platform', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-account-reload-'))
+  process.env.DSH_HOME = dir
+  try {
+    const first = await import('../index.js?account-reload-first-' + dir.replace(/[\\/]/g, '_'))
+    const firstHarness = installWalletRouteHarness(first, {
+      async set() {},
+      async resolve() { return undefined },
+    })
+    const added = await firstHarness.call('/api/wallet/accounts', 'POST', {
+      name: '重载账户', apiKey: 'sk-reload-1234567890',
+    })
+    assert.equal(added.json.ok, true)
+    await new Promise(resolve => setTimeout(resolve, 750))
+
+    const second = await import('../index.js?account-reload-second-' + Date.now() + '-' + dir.replace(/[\\/]/g, '_'))
+    const secondHarness = installWalletRouteHarness(second, {
+      async set() {},
+      async resolve() { return undefined },
+    })
+    const listed = await secondHarness.call('/api/wallet/accounts', 'GET')
+    assert.equal(listed.json.accounts.length, 1)
+    assert.equal(listed.json.accounts[0].name, '重载账户')
+    assert.match(listed.json.accounts[0].maskedKey, /^sk-r\*{3}7890$/)
+    const health = await secondHarness.call('/api/wallet/health', 'GET')
+    assert.equal(health.json.accounts.status, 'ready')
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 100))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('missing primary account file recovers from its encrypted backup', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-account-backup-recovery-'))
+  process.env.DSH_HOME = dir
+  try {
+    const first = await import('../index.js?account-backup-first-' + Date.now() + '-' + dir.replace(/[\\/]/g, '_'))
+    const firstHarness = installWalletRouteHarness(first, {
+      async set() {},
+      async resolve() { return undefined },
+    })
+    const added = await firstHarness.call('/api/wallet/accounts', 'POST', {
+      name: '备份恢复账户', apiKey: 'sk-backup-recovery-1234567890',
+    })
+    assert.equal(added.json.ok, true)
+    await new Promise(resolve => setTimeout(resolve, 750))
+    const accountPath = join(dir, 'storages', 'accounts.json')
+    const backupPath = accountPath + '.bak'
+    copyFileSync(accountPath, backupPath)
+    unlinkSync(accountPath)
+
+    const second = await import('../index.js?account-backup-second-' + Date.now() + '-' + dir.replace(/[\\/]/g, '_'))
+    const secondHarness = installWalletRouteHarness(second, {
+      async set() {},
+      async resolve() { return undefined },
+    })
+    const listed = await secondHarness.call('/api/wallet/accounts', 'GET')
+    assert.equal(listed.json.accounts.length, 1)
+    assert.equal(listed.json.accounts[0].name, '备份恢复账户')
+    const health = await secondHarness.call('/api/wallet/health', 'GET')
+    assert.equal(health.json.accounts.status, 'recovered')
+    await new Promise(resolve => setTimeout(resolve, 750))
+    assert.equal(existsSync(accountPath), true, 'recovered data is written back to the primary file')
+    assert.doesNotMatch(readFileSync(accountPath, 'utf8'), /sk-backup-recovery/)
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 100))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('an unreadable encrypted account store fails closed without overwriting the file', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-account-locked-'))
+  const storageDir = join(dir, 'storages')
+  mkdirSync(storageDir, { recursive: true })
+  const accountPath = join(storageDir, 'accounts.json')
+  const corrupt = '{not valid encrypted account data'
+  writeFileSync(accountPath, corrupt)
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?account-locked-' + Date.now() + '-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const harness = installWalletRouteHarness(mod, {
+      async set() {},
+      async resolve() { return undefined },
+    })
+    const health = await harness.call('/api/wallet/health', 'GET')
+    assert.equal(health.json.accounts.status, 'locked')
+    const response = await harness.call('/api/wallet/accounts', 'POST', {
+      name: '不能覆盖', apiKey: 'sk-must-not-overwrite-1234567890',
+    })
+    assert.equal(response.status, 423)
+    assert.equal(response.json.error, 'account-storage-locked')
+    await new Promise(resolve => setTimeout(resolve, 650))
+    assert.equal(readFileSync(accountPath, 'utf8'), corrupt)
   } finally {
     process.env.DSH_HOME = previousHome
     await new Promise(resolve => setTimeout(resolve, 100))
@@ -1980,8 +2163,43 @@ test('peakClockState wraps midnight, keys reminders, and reads IANA wall time', 
   assert.equal(weekend.inPeak, false, 'weekend never enters peak')
   assert.equal(weekend.weekendOffPeak, true)
   assert.equal(weekend.windows.length, 0, 'weekend ring has no peak arcs')
-  assert.match(weekend.tip, /周一 09:00 恢复标准价/)
-  assert.match(weekend.windowSummary, /周末全天低谷/)
+  assert.match(weekend.tip, /周一 09:00 恢复工作日规则/)
+  assert.doesNotMatch(weekend.tip, /还有|剩/, 'weekend tooltip omits a long countdown')
+  assert.equal(weekend.countdownSummary, '周六全天低谷', 'Saturday card names the current day instead of showing remaining time')
+  assert.equal(weekend.switchBody, '已进入周末低谷，全天按半价计费')
+  assert.match(weekend.windowSummary, /周六全天低谷/)
+  const nextSaturday = state({
+    timezone: 'Asia/Shanghai', offsetMinutes: 480,
+    windows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+    offPeakRate: 0.5, weekendOffPeak: true,
+  }, 10, Date.parse('2026-08-29T02:00:00Z'))
+  const nextSunday = state({
+    timezone: 'Asia/Shanghai', offsetMinutes: 480,
+    windows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+    offPeakRate: 0.5, weekendOffPeak: true,
+  }, 10, Date.parse('2026-08-30T02:00:00Z'))
+  const fridayEvening = state({
+    timezone: 'Asia/Shanghai', offsetMinutes: 480,
+    windows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+    offPeakRate: 0.5, weekendOffPeak: false,
+    weekendOffPeakSince: Date.parse('2026-08-22T16:00:00Z'),
+  }, 18.5, Date.parse('2026-08-28T10:30:00Z'))
+  assert.equal(fridayEvening.countdownSummary, '周末全天低谷')
+  assert.doesNotMatch(fridayEvening.countdownSummary, /周一|接续/, 'Friday card keeps the weekend reminder short')
+  assert.doesNotMatch(fridayEvening.tip, /还有|剩/, 'Friday does not show a misleading Saturday countdown')
+  assert.ok(fridayEvening.windowSummary.includes('周六/周日全天低谷'))
+  assert.equal(nextSaturday.countdownSummary, '周六全天低谷')
+  assert.equal(nextSunday.countdownSummary, '周日全天低谷')
+  assert.equal(fridayEvening.periodId, nextSaturday.periodId, 'Friday evening and Saturday share the continuous low-price period')
+  assert.equal(nextSaturday.periodId, nextSunday.periodId, 'Saturday and Sunday share one reminder period')
+  const mondayMorning = state({
+    timezone: 'Asia/Shanghai', offsetMinutes: 480,
+    windows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+    offPeakRate: 0.5, weekendOffPeak: false,
+    weekendOffPeakSince: Date.parse('2026-08-22T16:00:00Z'),
+  }, 8, Date.parse('2026-08-31T00:00:00Z'))
+  assert.equal(mondayMorning.countdownSummary, '剩 1h 进入高峰', 'Monday before 09:00 states the target state')
+  assert.equal(nextSunday.periodId, mondayMorning.periodId, 'Monday before 09:00 remains in the same continuous low-price period')
   const weekendRing = exports.__testing.peakRingSVG([], 10, 76, weekend.ariaText, true)
   assert.ok(findElement(weekendRing, (el) => el.props && String(el.props.className || '').includes('dshw_ringOff')), 'weekend ring renders a full off-peak arc')
   // IANA wall time: Beijing 11:30 read from a UTC instant, plus offset fallback.
@@ -2153,6 +2371,14 @@ test('peak prefs writes suppress their own event echo', () => {
     assert.ok(start >= 0, fn + ' must exist')
     assert.match(ringBody.slice(start, start + 420), /announcePrefs\(/, fn + ' must announce through the guarded helper')
   }
+})
+
+test('all recharge surfaces use the desktop external-link adapter', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.doesNotMatch(source, /window\.open\(/, 'desktop wrappers must not be bypassed by direct window.open calls')
+  assert.match(source, /function openOfficialRecharge/, 'all compact recharge surfaces share the guarded helper')
+  assert.ok((source.match(/openOfficialRecharge\(\)/g) || []).length >= 5, 'every compact recharge surface uses the guarded helper')
+  assert.ok((source.match(/compatibility\.openExternal\(/g) || []).length >= 2, 'the helper and full wallet confirmation route through openExternal')
 })
 
 test('drag latch releases after pointerup so the card stays clickable', () => {

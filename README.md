@@ -24,7 +24,7 @@
 
 - **Official DeepSeek** — live balance (60s global refresh with fast boot retries), an estimated current-session cost (not an official bill) locked to the price active for each usage event, including the 2026-08-17 peak/off-peak rollout, and token breakdown.
 - **Vision model accounting** — `deepseek-v4-flash-vision-exp` is priced like V4 Flash; image tokens reported by the Harness are included with text tokens.
-- **v4 peak/off-peak ring clock** — a resident 24-hour sidebar footer widget for `v4-flash` and `v4-pro`, indicating real-time pricing windows (peak vs. 50% discount off-peak), countdown to the next switch, and optional desktop switch notifications. Weekdays use 09:00–12:00 and 14:00–18:00 Beijing time; Saturday and Sunday are all-day off-peak from 2026-08-23. Other models keep their flat rates.
+- **v4 peak/off-peak ring clock** — a resident 24-hour sidebar footer widget for `v4-flash` and `v4-pro`, indicating real-time pricing windows (peak vs. 50% discount off-peak), weekday switch countdowns, and optional desktop switch notifications. Saturday shows “Saturday all-day off-peak” and Sunday shows “Sunday all-day off-peak”, without a long countdown; Monday before 09:00 shows only the remaining time. Weekdays use 09:00–12:00 and 14:00–18:00 Beijing time; Saturday and Sunday are all-day off-peak from 2026-08-23. Other models keep their flat rates.
 - **Official pricing sync** — periodically checks the official DeepSeek pricing page, applies only a fully validated table, and visibly keeps the built-in rules when the page is unavailable or changes format.
 - **Third-party total** — current-session tokens (input / cache read / output). No balance guessing, no cost math, zero configuration.
 - **Provider classification** — observed wrapper routes appear in the settings page; opted-in routes join the official token/cost bucket and are priced with the official table.
@@ -153,11 +153,11 @@ For buildable DSH hosts, the npm package and repository include a versioned [Age
 CNY per 1M tokens, curated from official announcements (cache writes are not billed):
 
 - Since 2025-02-09 — deepseek-chat 2/8 (cache read 0.5), deepseek-reasoner 4/16 (cache read 1)
-- Since 2026-04-24 — v4-flash 1/2 (cache read 0.02), v4-pro 3/6 (cache read 0.025), v4-flash-vision-exp 1/2 (cache read 0.02)
+- Since 2026-04-24 — v4-flash 1/2 (cache read 0.02), v4-pro 3/6 (cache read 0.025)
 - Since 2026-08-17 00:00 Beijing — peak/off-peak pricing for the v4 models (peak windows Beijing 09:00–12:00 / 14:00–18:00; off-peak is half the peak rate):
   - v4-flash (off-peak / peak): cache read 0.05 / 0.10, input 1.5 / 3, output 4.5 / 9
   - v4-pro (off-peak / peak): cache read 0.15 / 0.30, input 4.5 / 9, output 13.5 / 27
-  - v4-flash-vision-exp (off-peak / peak): cache read 0.05 / 0.10, input 1.5 / 3, output 4.5 / 9
+- Since 2026-08-21 — v4-flash-vision-exp launched with the V4 Flash peak/off-peak table: cache read 0.05 / 0.10, input 1.5 / 3, output 4.5 / 9.
 - Since 2026-08-23 00:00 Beijing — Saturday and Sunday are no longer split into peak/off-peak windows; weekend calls use the off-peak rates all day. Weekday peak windows remain 09:00–12:00 and 14:00–18:00.
 
 deepseek-chat and deepseek-reasoner keep their flat rates. Each usage event is priced when it arrives; upgrading from 0.1.2 migrates legacy counters once using the then-current rate. Costs are estimates; the API-returned balance is authoritative.

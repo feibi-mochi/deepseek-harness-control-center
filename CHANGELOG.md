@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.1 - 2026-08-23
+
+- 修复 Windows DPAPI 账户密钥在重启后无法解密的问题，并在加密文件损坏或密钥不可用时锁定写入，避免覆盖原数据。 / Fixed Windows DPAPI account keys failing to decrypt after restart and locked writes when encrypted data cannot be recovered, preventing accidental overwrite.
+- 修复 Electron/Tauri 同步通知句柄的点击/关闭回调断链，并让所有充值入口统一经过桌面端外链适配与首次域名确认。 / Fixed callback wiring for synchronous Electron/Tauri notification handles and routed every recharge entry through the desktop external-link adapter and first-use domain confirmation.
+- 修复官方价格页改用“周一至周五”表述后同步被误判为结构变化的问题，并把视觉模型的计费生效时间校正为 2026-08-21 上线日。 / Accepted the official pricing page's current weekday-only wording and corrected vision-model billing to its 2026-08-21 launch date.
+- 将周五 18:00 至周一 09:00 作为连续低谷周期：周五提示“周末全天低谷”，周六/周日分别显示当天全天低谷，周一 09:00 前显示剩余多久进入高峰；跨午夜不重复提醒。 / Treated Friday 18:00 through Monday 09:00 as one continuous off-peak period: Friday previews the all-weekend rule, Saturday/Sunday name the current day, Monday shows time remaining to peak, and midnight boundaries do not repeat alerts.
+- 旧客户端在周末收到空峰值窗口，避免未强刷的 Edge 标签页继续误报高峰；账户文件现在自动保留加密 `.bak`，主文件缺失时可自动恢复。当前 91/91 通过。 / Weekend snapshots give stale clients no peak windows so an old Edge tab cannot keep falsely reporting peak; encrypted account files now keep a `.bak` fallback that restores a missing primary file. 91/91 tests pass.
+
 ## 0.3.0 - 2026-08-23
 
 - 新增 `deepseek-v4-flash-vision-exp` 视觉模型计费，沿用 V4 Flash 的峰谷价格；图片 token 由 Harness 上报后与文本 token 一起计入。 / Added billing for `deepseek-v4-flash-vision-exp` using V4 Flash peak/off-peak rates; image tokens reported by Harness are counted with text tokens.

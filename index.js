@@ -18,7 +18,7 @@
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -27,7 +27,7 @@ export const inject = ['webServer']
 
 const OFFICIAL_PROVIDER = 'deepseek-official'
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
-const PLUGIN_VERSION = '0.3.0'
+const PLUGIN_VERSION = '0.3.1'
 const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
 const PRICING_SYNC_INTERVAL_MS = 6 * 60 * 60_000
 const PRICING_SYNC_TIMEOUT_MS = 8_000
@@ -36,6 +36,7 @@ const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const STORE_PATH = join(DSH_HOME, 'storages', 'wallet.json')
 const ACCOUNTS_PATH = join(DSH_HOME, 'storages', 'accounts.json')
 const ACCOUNTS_KEY_PATH = ACCOUNTS_PATH + '.key'
+const ACCOUNTS_BACKUP_PATH = ACCOUNTS_PATH + '.bak'
 const ACCOUNTS_VERSION = 2
 const ACCOUNTS_CRYPTO_VERSION = 1
 const CREDENTIAL_REF = 'DEEPSEEK_API_KEY'
@@ -67,6 +68,22 @@ export function isBeijingPeak(atMs) {
   return peakWindows.some((window) => hours >= window.startHour && hours < window.endHour)
 }
 
+export function pricingWindowSnapshot(atMs = Date.now()) {
+  const weekendOffPeak = atMs >= weekendOffPeakSince && isBeijingWeekend(atMs)
+  return {
+    timezone: 'Asia/Shanghai',
+    offsetMinutes: 480,
+    // Current clients use weekendOffPeak for a full green ring. Empty windows
+    // also make stale pre-weekend clients fail neutral instead of falsely
+    // claiming Sunday is a peak period until the browser is hard-refreshed.
+    windows: weekendOffPeak ? [] : peakWindows.map((window) => ({ ...window })),
+    offPeakRate: OFF_PEAK_RATE,
+    isPeak: isBeijingPeak(atMs),
+    weekendOffPeak,
+    weekendOffPeakSince,
+  }
+}
+
 // Pricing timeline (CNY per 1M tokens; cacheWrite is not billed by DeepSeek).
 // Curated from the official announcements; later policies win per model.
 export const PRICE_POLICIES = [
@@ -82,7 +99,6 @@ export const PRICE_POLICIES = [
     models: {
       'deepseek-v4-flash': { cacheHit: 0.02, input: 1, output: 2 },
       'deepseek-v4-pro': { cacheHit: 0.025, input: 3, output: 6 },
-      'deepseek-v4-flash-vision-exp': { cacheHit: 0.02, input: 1, output: 2 },
     },
   },
   {
@@ -92,6 +108,13 @@ export const PRICE_POLICIES = [
     models: {
       'deepseek-v4-flash': { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] },
       'deepseek-v4-pro': { cacheHit: [0.15, 0.3], input: [4.5, 9], output: [13.5, 27] },
+    },
+  },
+  {
+    // Vision Exp was released on 2026-08-21 and uses the V4 Flash table.
+    since: Date.UTC(2026, 7, 20, 16),
+    peakOffPeak: true,
+    models: {
       'deepseek-v4-flash-vision-exp': { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] },
     },
   },
@@ -105,6 +128,7 @@ let pricingSync = {
   etag: null,
   lastModified: null,
   ruleVersion: 'built-in-2026-08-23',
+  modelCount: 3,
   message: '尚未检查官方价格页',
 }
 
@@ -167,17 +191,20 @@ export function parseOfficialPricingHtml(html) {
     }
   }
   const text = decodeHtmlText(html)
-  const windowMatch = text.match(/高峰时段为北京时间\s*(\d{1,2}):00\s*-\s*(\d{1,2}):00、\s*(\d{1,2}):00\s*-\s*(\d{1,2}):00/)
+  const windowMatch = text.match(/高峰时段为北京时间(?:周一至周五)?\s*(\d{1,2}):00\s*-\s*(\d{1,2}):00、\s*(\d{1,2}):00\s*-\s*(\d{1,2}):00/)
   if (windowMatch === null) throw new Error('official peak window changed')
   const parsedWindows = [
     { startHour: Number(windowMatch[1]), endHour: Number(windowMatch[2]) },
     { startHour: Number(windowMatch[3]), endHour: Number(windowMatch[4]) },
   ]
+  const weekdayOnly = /高峰时段为北京时间周一至周五/.test(text)
   const weekendMatch = text.match(/北京时间\s*(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日[^。]*?00:00起[^。]*?周末[^。]*?低谷/)
-  if (weekendMatch === null) throw new Error('official weekend rule changed')
-  const weekendSince = Date.UTC(
-    Number(weekendMatch[1]), Number(weekendMatch[2]) - 1, Number(weekendMatch[3]), 0, 0, 0, 0,
-  ) - BEIJING_OFFSET_MS
+  if (!weekdayOnly && weekendMatch === null) throw new Error('official weekend rule changed')
+  const weekendSince = weekdayOnly
+    ? WEEKEND_OFF_PEAK_SINCE
+    : Date.UTC(
+      Number(weekendMatch[1]), Number(weekendMatch[2]) - 1, Number(weekendMatch[3]), 0, 0, 0, 0,
+    ) - BEIJING_OFFSET_MS
   return {
     models: modelsWithRates,
     peakWindows: parsedWindows,
@@ -187,11 +214,13 @@ export function parseOfficialPricingHtml(html) {
 }
 
 function applyOfficialPricing(parsed, response) {
-  const base = PRICE_POLICIES[PRICE_POLICIES.length - 1]
-  activePricePolicies = [
-    ...PRICE_POLICIES.slice(0, -1),
-    { ...base, models: parsed.models },
-  ]
+  activePricePolicies = PRICE_POLICIES.map((policy) => {
+    const models = {}
+    for (const model of Object.keys(policy.models)) {
+      models[model] = parsed.models[model] || policy.models[model]
+    }
+    return { ...policy, models }
+  })
   peakWindows = parsed.peakWindows.map((window) => ({ ...window }))
   weekendOffPeakSince = parsed.weekendOffPeakSince
   pricingSync = {
@@ -201,6 +230,7 @@ function applyOfficialPricing(parsed, response) {
     etag: response?.headers?.get?.('etag') ?? pricingSync.etag,
     lastModified: response?.headers?.get?.('last-modified') ?? pricingSync.lastModified,
     ruleVersion: parsed.ruleVersion,
+    modelCount: Object.keys(parsed.models).length,
     message: '已同步官方价格页',
   }
 }
@@ -209,6 +239,7 @@ async function syncOfficialPricing(logger) {
   if (typeof fetch !== 'function') return
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), PRICING_SYNC_TIMEOUT_MS)
+  let stage = 'network'
   try {
     const headers = {}
     if (pricingSync.etag) headers['if-none-match'] = pricingSync.etag
@@ -219,14 +250,18 @@ async function syncOfficialPricing(logger) {
       return
     }
     if (!response.ok) throw new Error('official pricing page returned ' + response.status)
+    stage = 'parse'
     const parsed = parseOfficialPricingHtml(await response.text())
     applyOfficialPricing(parsed, response)
   } catch (error) {
+    const hasValidatedOfficialRule = typeof pricingSync.ruleVersion === 'string' && pricingSync.ruleVersion.startsWith('official-')
     pricingSync = {
       ...pricingSync,
-      status: pricingSync.checkedAt > 0 ? 'review-required' : 'offline',
+      status: stage === 'parse' ? 'review-required' : 'offline',
       checkedAt: Date.now(),
-      message: pricingSync.checkedAt > 0 ? '官方价格页结构有变化，需要复核' : '官方价格页暂时不可用，使用内置规则',
+      message: stage === 'parse'
+        ? '官方价格页结构有变化，需要复核'
+        : hasValidatedOfficialRule ? '官方价格页暂时不可用，沿用上次已验证规则' : '官方价格页暂时不可用，使用内置规则',
     }
     if (logger && typeof logger.warn === 'function') logger.warn('dsh-wallet: official pricing sync unavailable')
   } finally {
@@ -241,7 +276,7 @@ export function pricingSnapshot() {
     checkedAt: pricingSync.checkedAt,
     ruleVersion: pricingSync.ruleVersion,
     message: pricingSync.message,
-    modelCount: Object.keys(activePricePolicies[activePricePolicies.length - 1].models).length,
+    modelCount: pricingSync.modelCount,
     peakWindows: peakWindows.map((window) => ({ ...window })),
     weekendOffPeakSince,
   }
@@ -552,14 +587,22 @@ const WINDOWS_DPAPI_UNPROTECT = [
 let fallbackEncryptionKey = null
 let accountStorageScheme = process.platform === 'win32' ? 'windows-dpapi' : 'aes-gcm-file-key'
 let accountStorageError = null
+let accountStorageLocked = false
+let accountStorageRecovered = false
 
 function runWindowsDpapi(operation, value) {
   if (process.platform !== 'win32') return null
+  // Protect expects base64-encoded UTF-8 plaintext. Unprotect expects the
+  // DPAPI ciphertext's own base64 representation, so encoding it a second
+  // time makes every persisted account undecryptable after restart.
+  const input = operation === 'protect'
+    ? Buffer.from(value, 'utf8').toString('base64')
+    : value
   const result = spawnSync(
     'powershell.exe',
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', operation === 'protect' ? WINDOWS_DPAPI_PROTECT : WINDOWS_DPAPI_UNPROTECT],
     {
-      input: Buffer.from(value, 'utf8').toString('base64'),
+      input,
       encoding: 'utf8',
       windowsHide: true,
       maxBuffer: 1024 * 1024,
@@ -570,7 +613,7 @@ function runWindowsDpapi(operation, value) {
   return output === '' ? null : output
 }
 
-function getFallbackEncryptionKey() {
+function getFallbackEncryptionKey(createIfMissing = true) {
   if (fallbackEncryptionKey !== null) return fallbackEncryptionKey
   try {
     mkdirSync(dirname(ACCOUNTS_KEY_PATH), { recursive: true, mode: 0o700 })
@@ -579,6 +622,11 @@ function getFallbackEncryptionKey() {
       if (existing.length !== 32) throw new Error('account encryption key has an invalid length')
       fallbackEncryptionKey = existing
     } else {
+      if (!createIfMissing) {
+        accountStorageError = 'account-encryption-key-missing'
+        accountStorageLocked = true
+        return null
+      }
       fallbackEncryptionKey = randomBytes(32)
       writeFileSync(ACCOUNTS_KEY_PATH, fallbackEncryptionKey, { mode: 0o600 })
       chmodSync(ACCOUNTS_KEY_PATH, 0o600)
@@ -590,6 +638,29 @@ function getFallbackEncryptionKey() {
   }
 }
 
+function encryptApiKeyAes(apiKey, key, iv = randomBytes(12)) {
+  if (!Buffer.isBuffer(key) || key.length !== 32) throw new Error('AES account key must contain 32 bytes')
+  if (!Buffer.isBuffer(iv) || iv.length !== 12) throw new Error('AES-GCM IV must contain 12 bytes')
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const ciphertext = Buffer.concat([cipher.update(apiKey, 'utf8'), cipher.final()])
+  return {
+    version: ACCOUNTS_CRYPTO_VERSION,
+    scheme: 'aes-gcm-file-key',
+    iv: iv.toString('base64'),
+    tag: cipher.getAuthTag().toString('base64'),
+    payload: ciphertext.toString('base64'),
+  }
+}
+
+function decryptApiKeyAes(value, key) {
+  if (!Buffer.isBuffer(key) || key.length !== 32) throw new Error('AES account key must contain 32 bytes')
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(value.iv, 'base64'))
+  decipher.setAuthTag(Buffer.from(value.tag, 'base64'))
+  return Buffer.concat([decipher.update(Buffer.from(value.payload, 'base64')), decipher.final()]).toString('utf8')
+}
+
+export const __testing = { encryptApiKeyAes, decryptApiKeyAes, compareVersions }
+
 function protectApiKey(apiKey) {
   const dpapi = runWindowsDpapi('protect', apiKey)
   if (dpapi !== null) {
@@ -600,17 +671,9 @@ function protectApiKey(apiKey) {
   const key = getFallbackEncryptionKey()
   if (key === null) return null
   try {
-    const iv = randomBytes(12)
-    const cipher = createCipheriv('aes-256-gcm', key, iv)
-    const ciphertext = Buffer.concat([cipher.update(apiKey, 'utf8'), cipher.final()])
+    const encrypted = encryptApiKeyAes(apiKey, key)
     accountStorageScheme = 'aes-gcm-file-key'
-    return {
-      version: ACCOUNTS_CRYPTO_VERSION,
-      scheme: 'aes-gcm-file-key',
-      iv: iv.toString('base64'),
-      tag: cipher.getAuthTag().toString('base64'),
-      payload: ciphertext.toString('base64'),
-    }
+    return encrypted
   } catch {
     accountStorageError = 'account-encryption-failed'
     return null
@@ -618,25 +681,41 @@ function protectApiKey(apiKey) {
 }
 
 function unprotectApiKey(value) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return ''
-  if (value.version !== ACCOUNTS_CRYPTO_VERSION || typeof value.scheme !== 'string' || typeof value.payload !== 'string') return ''
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    accountStorageError = 'account-encrypted-record-invalid'
+    accountStorageLocked = true
+    return ''
+  }
+  if (value.version !== ACCOUNTS_CRYPTO_VERSION || typeof value.scheme !== 'string' || typeof value.payload !== 'string') {
+    accountStorageError = 'account-encrypted-record-invalid'
+    accountStorageLocked = true
+    return ''
+  }
   if (value.scheme === 'windows-dpapi') {
     const decoded = runWindowsDpapi('unprotect', value.payload)
-    if (decoded === null) accountStorageError = 'account-decryption-failed'
+    if (decoded === null) {
+      accountStorageError = 'account-decryption-failed'
+      accountStorageLocked = true
+    }
     else {
       try { return Buffer.from(decoded, 'base64').toString('utf8') } catch { /* fall through */ }
+      accountStorageError = 'account-decryption-failed'
+      accountStorageLocked = true
     }
     return ''
   }
-  if (value.scheme !== 'aes-gcm-file-key' || typeof value.iv !== 'string' || typeof value.tag !== 'string') return ''
-  const key = getFallbackEncryptionKey()
+  if (value.scheme !== 'aes-gcm-file-key' || typeof value.iv !== 'string' || typeof value.tag !== 'string') {
+    accountStorageError = 'account-encrypted-record-invalid'
+    accountStorageLocked = true
+    return ''
+  }
+  const key = getFallbackEncryptionKey(false)
   if (key === null) return ''
   try {
-    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(value.iv, 'base64'))
-    decipher.setAuthTag(Buffer.from(value.tag, 'base64'))
-    return Buffer.concat([decipher.update(Buffer.from(value.payload, 'base64')), decipher.final()]).toString('utf8')
+    return decryptApiKeyAes(value, key)
   } catch {
     accountStorageError = 'account-decryption-failed'
+    accountStorageLocked = true
     return ''
   }
 }
@@ -645,8 +724,9 @@ export function accountStorageSnapshot() {
   return {
     encryptedAtRest: true,
     scheme: accountStorageScheme,
-    status: accountStorageError === null ? 'ready' : 'error',
+    status: accountStorageLocked ? 'locked' : accountStorageRecovered ? 'recovered' : accountStorageError === null ? 'ready' : 'error',
     error: accountStorageError,
+    locked: accountStorageLocked,
   }
 }
 
@@ -680,14 +760,33 @@ export function normalizeAccountsData(value) {
   return { version: ACCOUNTS_VERSION, accounts, activeId }
 }
 
+function readAccountsFile(path) {
+  const raw = JSON.parse(readFileSync(path, 'utf8'))
+  const normalized = normalizeAccountsData(raw)
+  const legacyPlaintext = Array.isArray(raw?.accounts)
+    && raw.accounts.some((account) => account && typeof account.apiKey === 'string')
+  return { accounts: normalized, migrated: legacyPlaintext || raw?.version !== ACCOUNTS_VERSION }
+}
+
 function loadAccounts() {
+  if (!existsSync(ACCOUNTS_PATH)) {
+    if (!existsSync(ACCOUNTS_BACKUP_PATH)) return { accounts: emptyAccounts(), migrated: false }
+    try {
+      const recovered = readAccountsFile(ACCOUNTS_BACKUP_PATH)
+      accountStorageRecovered = true
+      accountStorageError = 'account-store-restored-from-backup'
+      return { accounts: recovered.accounts, migrated: true }
+    } catch {
+      accountStorageError = 'account-backup-invalid'
+      accountStorageLocked = true
+      return { accounts: emptyAccounts(), migrated: false }
+    }
+  }
   try {
-    const raw = JSON.parse(readFileSync(ACCOUNTS_PATH, 'utf8'))
-    const normalized = normalizeAccountsData(raw)
-    const legacyPlaintext = Array.isArray(raw?.accounts)
-      && raw.accounts.some((account) => account && typeof account.apiKey === 'string')
-    return { accounts: normalized, migrated: legacyPlaintext || raw?.version !== ACCOUNTS_VERSION }
+    return readAccountsFile(ACCOUNTS_PATH)
   } catch {
+    accountStorageError = 'account-store-invalid'
+    accountStorageLocked = true
     return { accounts: emptyAccounts(), migrated: false }
   }
 }
@@ -703,6 +802,7 @@ function persistAccounts(logger) {
     accountsSaveTimer = null
   }
   try {
+    if (accountStorageLocked) throw new Error('encrypted account store is locked')
     mkdirSync(dirname(ACCOUNTS_PATH), { recursive: true, mode: 0o700 })
     const tmp = ACCOUNTS_PATH + '.tmp'
     const encryptedAccounts = accounts.accounts.map((account) => {
@@ -717,8 +817,14 @@ function persistAccounts(logger) {
     })
     writeFileSync(tmp, JSON.stringify({ version: ACCOUNTS_VERSION, accounts: encryptedAccounts, activeId: accounts.activeId }), { mode: 0o600 })
     chmodSync(tmp, 0o600)
+    if (existsSync(ACCOUNTS_PATH)) {
+      copyFileSync(ACCOUNTS_PATH, ACCOUNTS_BACKUP_PATH)
+      chmodSync(ACCOUNTS_BACKUP_PATH, 0o600)
+    }
     renameSync(tmp, ACCOUNTS_PATH)
     accountsNeedsSave = false
+    accountStorageRecovered = false
+    accountStorageError = null
   } catch (error) {
     accountStorageError = accountStorageError || 'account-encryption-failed'
     if (logger && typeof logger.warn === 'function') {
@@ -801,6 +907,7 @@ export function accountListView() {
       active: account.id === accounts.activeId,
     })),
     activeId: accounts.activeId,
+    storage: accountStorageSnapshot(),
   }
 }
 
@@ -1075,15 +1182,7 @@ function snapshotView(sessionId) {
       })(),
     rechargeUrl: RECHARGE_URL,
     // Peak/off-peak policy for the ring clock; billed in Asia/Shanghai.
-    pricingWindows: {
-      timezone: 'Asia/Shanghai',
-      offsetMinutes: 480,
-      windows: peakWindows.map(w => ({ startHour: w.startHour, endHour: w.endHour })),
-      offPeakRate: OFF_PEAK_RATE,
-      isPeak: isBeijingPeak(now),
-      weekendOffPeak: now >= weekendOffPeakSince && isBeijingWeekend(now),
-      weekendOffPeakSince,
-    },
+    pricingWindows: pricingWindowSnapshot(now),
     accounts: {
       activeId: accounts.activeId,
       activeName: active !== null ? active.name : null,
@@ -1195,16 +1294,18 @@ export function apply(ctx, config) {
   const balanceTimer = setInterval(() => void refreshBalance(ctx), BALANCE_REFRESH_MS)
   if (typeof balanceTimer.unref === 'function') balanceTimer.unref()
 
-  ctx.effect(() => {
-    const first = setTimeout(() => void syncOfficialPricing(ctx.logger), 1000)
-    const timer = setInterval(() => void syncOfficialPricing(ctx.logger), PRICING_SYNC_INTERVAL_MS)
-    if (typeof first.unref === 'function') first.unref()
-    if (typeof timer.unref === 'function') timer.unref()
-    return () => {
-      clearTimeout(first)
-      clearInterval(timer)
-    }
-  }, 'dsh-wallet: official pricing sync')
+  if (config.pricingSync !== false) {
+    ctx.effect(() => {
+      const first = setTimeout(() => void syncOfficialPricing(ctx.logger), 1000)
+      const timer = setInterval(() => void syncOfficialPricing(ctx.logger), PRICING_SYNC_INTERVAL_MS)
+      if (typeof first.unref === 'function') first.unref()
+      if (typeof timer.unref === 'function') timer.unref()
+      return () => {
+        clearTimeout(first)
+        clearInterval(timer)
+      }
+    }, 'dsh-wallet: official pricing sync')
+  }
 
   ctx.effect(() => {
     const disposeSnapshot = ctx.webServer.register({
@@ -1306,6 +1407,7 @@ export function apply(ctx, config) {
       handler: async (req, res) => {
         if (req.method === 'GET') return json(res, 200, { ok: true, ...accountListView() })
         if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        if (accountStorageLocked) return json(res, 423, { ok: false, error: 'account-storage-locked' })
         const body = await readBody(req)
         if (body === null || typeof body.name !== 'string' || typeof body.apiKey !== 'string') {
           return json(res, 400, { ok: false, error: 'name and apiKey are required' })
@@ -1345,6 +1447,7 @@ export function apply(ctx, config) {
       path: '/api/wallet/accounts/activate',
       handler: async (req, res) => {
         if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        if (accountStorageLocked) return json(res, 423, { ok: false, error: 'account-storage-locked' })
         const body = await readBody(req)
         if (body === null || typeof body.id !== 'string') return json(res, 400, { ok: false, error: 'id is required' })
         const result = await activateAccount(ctx, body.id)
@@ -1361,6 +1464,7 @@ export function apply(ctx, config) {
       path: '/api/wallet/accounts/remove',
       handler: async (req, res) => {
         if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        if (accountStorageLocked) return json(res, 423, { ok: false, error: 'account-storage-locked' })
         const body = await readBody(req)
         if (body === null || typeof body.id !== 'string') return json(res, 400, { ok: false, error: 'id is required' })
         const result = removeAccount(body.id)
