@@ -22,13 +22,14 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { PLAN_ADAPTERS, normalizePlanPayload, normalizePlanSnapshotCache, planAdapterById } from './lib/plans.js'
 
 export const name = 'wallet'
 export const inject = ['webServer']
 
 const OFFICIAL_PROVIDER = 'deepseek-official'
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
-const PLUGIN_VERSION = '0.3.2'
+const PLUGIN_VERSION = '0.3.3'
 const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
 const PRICING_SYNC_INTERVAL_MS = 6 * 60 * 60_000
 const PRICING_SYNC_TIMEOUT_MS = 8_000
@@ -44,12 +45,16 @@ const ACCOUNTS_CRYPTO_VERSION = 1
 const CREDENTIAL_REF = 'DEEPSEEK_API_KEY'
 const DEFAULT_THRESHOLD = 5
 const BALANCE_REFRESH_MS = 60_000
-const STORE_VERSION = 3
+const STORE_VERSION = 4
 const HISTORY_VERSION = 1
 const HISTORY_RETENTION_DAYS = 365
 const HISTORY_MAX_EVENTS = 20_000
 const HISTORY_TIMEZONE = 'Asia/Shanghai'
 const DAY_MS = 86_400_000
+const PLAN_REFRESH_MS = 5 * 60_000
+const PLAN_STALE_MS = 15 * 60_000
+const PLAN_REFRESH_TIMEOUT_MS = 12_000
+const PLAN_RESPONSE_MAX_BYTES = 1_000_000
 
 // Beijing (UTC+8, no DST) weekday peak windows: 09:00-12:00 and 14:00-18:00.
 // From 2026-08-23 00:00 Beijing, Saturday and Sunday are off-peak all day.
@@ -420,6 +425,7 @@ export function healthSnapshot() {
     pricing: pricingSnapshot(),
     accounts: accountStorageSnapshot(),
     usage: usageStorageSnapshot(),
+    plans: planHealthSnapshot(),
     runtime: { node: process.version, platform: process.platform },
   }
 }
@@ -891,6 +897,7 @@ export function normalizeStoreData(value, atMs = Date.now()) {
     sessions,
     officialProviders: normalizeProviderList(source.officialProviders),
     knownProviders: normalizeProviderList(source.knownProviders),
+    plans: normalizePlanSnapshotCache(source.plans, atMs),
   }
   if (Object.hasOwn(source, 'history')) normalized.history = normalizeHistory(source.history, atMs)
   return { store: normalized, migrated: JSON.stringify(source) !== JSON.stringify(normalized) }
@@ -903,7 +910,7 @@ let usageStorageRecovered = false
 let usageStoreSkipBackupOnce = false
 
 function emptyStoreData() {
-  return { version: STORE_VERSION, thresholds: { CNY: DEFAULT_THRESHOLD }, accountThresholds: {}, sessions: {}, officialProviders: [], knownProviders: [], history: emptyHistory() }
+  return { version: STORE_VERSION, thresholds: { CNY: DEFAULT_THRESHOLD }, accountThresholds: {}, sessions: {}, officialProviders: [], knownProviders: [], plans: {}, history: emptyHistory() }
 }
 
 function readStoreFile(path) {
@@ -993,6 +1000,167 @@ function persistStore(logger) {
 function scheduleSave(logger) {
   if (usageStorageLocked || saveTimer !== null) return
   saveTimer = setTimeout(() => persistStore(logger), 500)
+}
+
+// ---------------------------------------------------------------------------
+// Subscription-plan adapters. Each source is pinned to an official origin and
+// a DSH credential reference. Raw responses and credentials never reach the
+// browser; only normalized quota windows and bounded error enums are exposed.
+// ---------------------------------------------------------------------------
+
+const planRuntime = new Map(PLAN_ADAPTERS.map((adapter) => [adapter.id, {
+  configured: null,
+  checkedAt: 0,
+  refreshing: false,
+  error: null,
+  snapshot: store.plans[adapter.id] ?? null,
+}]))
+const planRefreshes = new Map()
+
+function planRuntimeFor(adapter) {
+  return planRuntime.get(adapter.id)
+}
+
+function planHttpError(status) {
+  if (status === 401 || status === 403) return 'unauthorized'
+  if (status === 429) return 'rate-limited'
+  return 'upstream-unavailable'
+}
+
+function boundedPlanError(error) {
+  if (error && typeof error === 'object' && typeof error.code === 'string') return error.code
+  if (error && typeof error === 'object' && error.name === 'AbortError') return 'timeout'
+  if (error instanceof SyntaxError) return 'invalid-response'
+  if (error instanceof Error && ['invalid-plan-response', 'plan-response-rejected'].includes(error.message)) return 'invalid-response'
+  return 'upstream-unavailable'
+}
+
+async function resolvePlanCredential(ctx, adapter) {
+  const credentials = ctx.get('credentials')
+  if (credentials === undefined) return { configured: null, key: null, error: 'credentials-unavailable' }
+  try {
+    const resolved = await credentials.resolve(adapter.credentialRef)
+    const value = resolved && typeof resolved.value === 'string' ? resolved.value.trim() : ''
+    if (value === '') return { configured: false, key: null, error: 'missing-credential' }
+    if (/[\r\n\u0000]/.test(value) || value.length > 16_384) return { configured: true, key: null, error: 'invalid-credential' }
+    return { configured: true, key: value, error: null }
+  } catch {
+    return { configured: null, key: null, error: 'credentials-unavailable' }
+  }
+}
+
+async function performPlanRefresh(ctx, adapter, force) {
+  const runtime = planRuntimeFor(adapter)
+  const auth = await resolvePlanCredential(ctx, adapter)
+  runtime.checkedAt = Date.now()
+  runtime.configured = auth.configured
+  if (auth.key === null) {
+    runtime.error = auth.error
+    return
+  }
+  if (!force && runtime.snapshot !== null && Date.now() - runtime.snapshot.fetchedAt < PLAN_REFRESH_MS) {
+    runtime.error = null
+    return
+  }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), PLAN_REFRESH_TIMEOUT_MS)
+  try {
+    const response = await fetch(adapter.endpoint, {
+      method: 'GET',
+      headers: {
+        authorization: auth.key,
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'content-type': 'application/json',
+      },
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      const error = new Error(planHttpError(response.status))
+      error.code = planHttpError(response.status)
+      throw error
+    }
+    const body = await response.text()
+    if (Buffer.byteLength(body, 'utf8') > PLAN_RESPONSE_MAX_BYTES) {
+      const error = new Error('invalid-response')
+      error.code = 'invalid-response'
+      throw error
+    }
+    const snapshot = normalizePlanPayload(adapter, JSON.parse(body), Date.now())
+    runtime.snapshot = snapshot
+    runtime.error = null
+    store.plans[adapter.id] = snapshot
+    scheduleSave(ctx.logger)
+  } catch (error) {
+    runtime.error = boundedPlanError(error)
+    if (ctx.logger && typeof ctx.logger.warn === 'function') ctx.logger.warn('dsh-wallet: subscription plan refresh failed for ' + adapter.id)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function refreshPlan(ctx, adapter, force = false) {
+  const active = planRefreshes.get(adapter.id)
+  if (active !== undefined) return active
+  const runtime = planRuntimeFor(adapter)
+  runtime.refreshing = true
+  const promise = performPlanRefresh(ctx, adapter, force).finally(() => {
+    runtime.refreshing = false
+    planRefreshes.delete(adapter.id)
+  })
+  planRefreshes.set(adapter.id, promise)
+  return promise
+}
+
+async function refreshPlans(ctx, options = {}) {
+  const force = options.force === true
+  const adapter = options.id === undefined || options.id === null ? null : planAdapterById(options.id)
+  if (options.id !== undefined && options.id !== null && adapter === null) return { ok: false, error: 'plan-not-found' }
+  const targets = adapter === null ? PLAN_ADAPTERS : [adapter]
+  await Promise.all(targets.map((item) => refreshPlan(ctx, item, force)))
+  return { ok: true, ...planView() }
+}
+
+export function planView(atMs = Date.now()) {
+  const sources = PLAN_ADAPTERS.map((adapter) => {
+    const runtime = planRuntimeFor(adapter)
+    const snapshot = runtime.snapshot
+    return {
+      id: adapter.id,
+      provider: adapter.provider,
+      name: adapter.name,
+      region: adapter.region,
+      kind: adapter.kind,
+      sourceDomain: adapter.sourceDomain,
+      configured: runtime.configured,
+      available: snapshot !== null,
+      refreshing: runtime.refreshing,
+      checkedAt: runtime.checkedAt || null,
+      fetchedAt: snapshot === null ? null : snapshot.fetchedAt,
+      stale: snapshot !== null && atMs - snapshot.fetchedAt > PLAN_STALE_MS,
+      error: runtime.error,
+      level: snapshot === null ? null : snapshot.level,
+      limits: snapshot === null ? [] : snapshot.limits,
+    }
+  })
+  return {
+    sources,
+    configuredCount: sources.filter((source) => source.configured === true).length,
+    availableCount: sources.filter((source) => source.available).length,
+    refreshing: sources.some((source) => source.refreshing),
+  }
+}
+
+function planHealthSnapshot() {
+  const view = planView()
+  return {
+    status: view.sources.some((source) => source.configured === true && source.available) ? 'ready'
+      : view.sources.some((source) => source.configured === true) ? 'error'
+        : view.sources.some((source) => source.configured === null) ? 'unknown' : 'unconfigured',
+    configuredCount: view.configuredCount,
+    availableCount: view.availableCount,
+    refreshing: view.refreshing,
+    sources: view.sources.map((source) => ({ id: source.id, configured: source.configured, available: source.available, stale: source.stale, error: source.error, fetchedAt: source.fetchedAt, sourceDomain: source.sourceDomain })),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1658,6 +1826,7 @@ function snapshotView(sessionId) {
       official: [...store.officialProviders],
       known: store.knownProviders.filter((p) => p !== OFFICIAL_PROVIDER && !store.officialProviders.includes(p)),
     },
+    plans: planView(now),
   }
 }
 
@@ -1755,6 +1924,13 @@ export function apply(ctx, config) {
   }, 'dsh-wallet: boot balance retries')
   const balanceTimer = setInterval(() => void refreshBalance(ctx), BALANCE_REFRESH_MS)
   if (typeof balanceTimer.unref === 'function') balanceTimer.unref()
+
+  let planTimer = null
+  if (config.planSync !== false) {
+    void refreshPlans(ctx)
+    planTimer = setInterval(() => void refreshPlans(ctx, { force: true }), PLAN_REFRESH_MS)
+    if (typeof planTimer.unref === 'function') planTimer.unref()
+  }
 
   if (config.pricingSync !== false) {
     ctx.effect(() => {
@@ -1881,6 +2057,24 @@ historyEventCount = store.history && store.history.events ? Object.keys(store.hi
         return json(res, 200, { ok: true, removed: previous })
       },
     })
+    const disposePlans = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/wallet/plans',
+      handler: async (req, res) => {
+        if (req.method === 'GET') {
+          if (PLAN_ADAPTERS.some((adapter) => planRuntimeFor(adapter).checkedAt === 0)) await refreshPlans(ctx)
+          return json(res, 200, { ok: true, ...planView() })
+        }
+        if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        const body = await readBody(req)
+        if (body === null) return json(res, 400, { ok: false, error: 'invalid-body' })
+        const id = body.id === undefined || body.id === null || body.id === '' ? null : body.id
+        if (id !== null && typeof id !== 'string') return json(res, 400, { ok: false, error: 'id must be a string' })
+        const result = await refreshPlans(ctx, { force: true, id })
+        if (!result.ok) return json(res, 404, result)
+        return json(res, 200, result)
+      },
+    })
     // -- multi-account routes -------------------------------------------------
     // Configure which wrapper provider routes (vision proxies and the like)
     // bill into the official bucket. Issue #21.
@@ -1983,11 +2177,13 @@ historyEventCount = store.history && store.history.events ? Object.keys(store.hi
       disposeClear()
       disposeHistory()
       disposeClearHistory()
+      disposePlans()
       disposeAccounts()
       disposeProviders()
       disposeActivate()
       disposeRemove()
       clearInterval(balanceTimer)
+      if (planTimer !== null) clearInterval(planTimer)
       if (saveTimer !== null) persistStore(ctx.logger)
       if (accountsSaveTimer !== null) persistAccounts(ctx.logger)
     }

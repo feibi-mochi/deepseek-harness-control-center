@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.3 - 2026-08-23
+
+- 新增通用官方套餐适配器契约，并首批接入 Z.ai Coding Plan 全球区与中国区；每个来源固定绑定官方域名和独立的 DSH 凭据引用，浏览器不会收到 Key、接口路径或原始响应。 / Added a generic official subscription-plan adapter contract with initial Z.ai Coding Plan Global and China adapters; each source is pinned to its official domain and its own DSH credential reference, while the browser receives no key, endpoint path, or raw response.
+- 套餐页分别显示 5 小时模型 Token 额度与月度 MCP 工具额度，包括已用百分比、可用时的已用/总量、重置时间、套餐等级、更新时间和来源域名；不把套餐额度换算成人民币余额。 / The plan view separates the 5-hour model-token window from monthly MCP-tool quota, showing percentage, available used/total values, reset time, plan level, update time, and source domain without converting subscription quota into currency.
+- 后台按来源独立解析凭据、5 分钟缓存并合并并发刷新；网络失败保留最近成功快照并标记缓存，401、限流、超时与响应结构变化只返回安全错误枚举。 / Each source resolves credentials independently, caches for five minutes, and deduplicates concurrent refreshes; failures preserve the latest successful snapshot and expose bounded error enums for authorization, rate limits, timeouts, and response changes.
+- 钱包设置页在账户管理之后常态显示套餐卡片，紧凑钱包与悬浮窗提供可折叠入口；新增响应式、浅深色、无嵌套交互控件和进度条可访问性样式。 / Wallet settings keeps plan cards visible after account management, while compact and floating wallet panels expose a collapsible entry with responsive, theme-native, non-nested controls and accessible progress bars.
+- 新增套餐响应归一化、缓存迁移、官方域名白名单、路由安全、失败保留和 UI 回归测试，并使用本机已配置的 Z.ai 中国区 Coding Plan 做了不输出敏感信息的真实接口验证。 / Added coverage for response normalization, cache migration, official-origin pinning, route safety, stale-success retention, and UI behavior, plus a redacted real-interface verification against the locally configured Z.ai China Coding Plan.
+
 ## 0.3.2 - 2026-08-23
 
 - 新增 365 天本地 Token 用量账本与折叠式热力图：按日期、会话、模型和官方/第三方 provider 展示调用次数、Token、缓存命中率与可定价费用。 / Added a 365-day local Token ledger and collapsible heatmap grouped by date, session, model, and official/third-party provider.

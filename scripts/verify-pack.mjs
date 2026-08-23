@@ -16,6 +16,7 @@ const expected = [
   'integrations/dsh-session-delete/preflight.mjs',
   'integrations/dsh-session-delete/reference/dsh-47f9438-session-delete.patch',
   'lib/client.js',
+  'lib/plans.js',
   'package.json',
 ].sort()
 

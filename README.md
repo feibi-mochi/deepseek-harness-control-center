@@ -14,7 +14,7 @@
 
 > A local-first companion that keeps account status, per-conversation usage, completion reminders, official recharge, flexible layout, and host-gated session controls beside the DSH composer.
 
-> **Version:** GitHub `main`, npm, and the latest Release are all v0.3.2.
+> **Version:** v0.3.3 is prepared on GitHub `main`; npm and the latest Release remain v0.3.2 until release approval completes.
 
 > If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
 
@@ -28,6 +28,7 @@
 - **Vision model accounting** — `deepseek-v4-flash-vision-exp` is priced like V4 Flash; image tokens reported by the Harness are included with text tokens.
 - **v4 peak/off-peak ring clock** — a resident 24-hour sidebar footer widget for `v4-flash`, `v4-pro`, and `v4-flash-vision-exp`. Weekday peak windows are 09:00–12:00 and 14:00–18:00 Beijing time. After Friday 18:00 the card previews “weekend all-day off-peak”; Saturday and Sunday name the current all-day off-peak rule; Monday before 09:00 shows the time remaining to enter peak. Optional notifications treat Friday 18:00 through Monday 09:00 as one continuous off-peak period.
 - **Official pricing sync** — periodically checks the official DeepSeek pricing page and applies only a fully validated table. Network failures retain the last validated rule (or the built-in rule before the first successful sync); an unrecognized page structure is marked for review instead of silently changing billing.
+- **Z.ai Coding Plan quotas** — a generic official-plan adapter monitors configured Global and China plans without exposing credentials. It separates the 5-hour model-token window from monthly MCP-tool usage, retains the last successful snapshot on failure, and never converts subscription quota into CNY balance.
 - **365-day local usage ledger** — Wallet settings keeps the heatmap visible, while compact wallet panels keep it collapsible. Stable request identities are deduplicated, official cost is locked at usage time, official and third-party data stay separate, and prompts or responses are never stored. Collection begins after upgrading to v0.3.2; older aggregate counters have no trustworthy dates and are not backfilled.
 - **Third-party total** — current-session tokens (input / cache read / output). No balance guessing, no cost math, zero configuration.
 - **Provider classification** — observed wrapper routes appear in the settings page; opted-in routes join the official token/cost bucket for subsequent calls and are priced with the official table. Existing history is not retroactively reclassified.
@@ -70,13 +71,13 @@ Details: [compatibility](#browser-desktop-and-os-compatibility) · [data and tru
 
 ## Install
 
-From npm (stable v0.3.2):
+From npm (stable v0.3.2; v0.3.3 pending release):
 
 ```sh
 dsh plugin --profile web add deepseek-harness-wallet
 ```
 
-or from GitHub `main` (current v0.3.2 source):
+or from GitHub `main` (current v0.3.3 source):
 
 ```sh
 dsh plugin --profile web add github:feibi-mochi/deepseek-harness-control-center
@@ -168,7 +169,7 @@ Historical deepseek-chat and deepseek-reasoner records retain their original fla
 ## Roadmap
 
 - [x] 365-day Token heatmap and rebuildable local usage ledger
-- [ ] Z.ai Coding Plan monitoring, built on a generic provider-adapter contract
+- [x] Z.ai Coding Plan Global/China monitoring on a generic official-plan adapter contract
 - [ ] Additional provider price/balance adapters only after real-account validation
 
 ## License

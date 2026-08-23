@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-wallet",
-  "description": "Local-first DeepSeek Harness control center for balance monitoring, usage accounting, a 365-day local token ledger, official pricing sync, peak/off-peak status, encrypted multi-account switching, health checks, completion reminders, recharge, and host-gated session controls.",
-  "version": "0.3.2",
+  "description": "Local-first DeepSeek Harness control center for balance monitoring, usage accounting, a 365-day local token ledger, Z.ai Coding Plan quota monitoring, official pricing sync, peak/off-peak status, encrypted multi-account switching, health checks, completion reminders, recharge, and host-gated session controls.",
+  "version": "0.3.3",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -13,12 +13,13 @@
     "CHANGELOG.md",
     "index.js",
     "lib/client.js",
+    "lib/plans.js",
     "cordis.patch.yml",
     "integrations/dsh-session-delete/**"
   ],
   "license": "MIT",
   "scripts": {
-    "check:syntax": "node --check index.js && node --check lib/client.js",
+    "check:syntax": "node --check index.js && node --check lib/client.js && node --check lib/plans.js",
     "check:pack": "node scripts/verify-pack.mjs",
     "test": "node --test"
   },
@@ -32,6 +33,8 @@
     "wallet",
     "multi-account",
     "account-switching",
+    "coding-plan",
+    "quota-monitoring",
     "llm",
     "agentic-ai"
   ],

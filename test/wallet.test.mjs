@@ -240,13 +240,14 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.3.2')
+  assert.equal(pkg.version, '0.3.3')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
     'CHANGELOG.md',
     'index.js',
     'lib/client.js',
+    'lib/plans.js',
     'cordis.patch.yml',
     'integrations/dsh-session-delete/**',
   ])
@@ -272,12 +273,13 @@ test('release identity and intended npm archive inventory stay aligned', () => {
     'integrations/dsh-session-delete/preflight.mjs',
     'integrations/dsh-session-delete/reference/dsh-47f9438-session-delete.patch',
     'lib/client.js',
+    'lib/plans.js',
     'package.json',
   ]
   for (const path of intendedArchive) {
     assert.equal(existsSync(resolve(REPO_ROOT, path)), true, `intended archive entry is missing: ${path}`)
   }
-  assert.deepEqual(intendedArchive.length, 14)
+  assert.deepEqual(intendedArchive.length, 15)
 })
 
 test('host integration kit is pinned, reviewable, and free of local-machine data', () => {
@@ -606,12 +608,13 @@ test('official cost is accumulated at usage time and remains stable later', () =
   assert.equal(bucket.models['deepseek-v4-pro'].input, 2_000_000)
 
   const normalized = normalizeStoreData({
-    version: 3,
+    version: 4,
     thresholds: { CNY: 5 },
     accountThresholds: {},
-    sessions: { current: { official: bucket, third: { models: {} } } },
+    sessions: { current: { official: { ...bucket }, third: { models: {} } } },
     officialProviders: [],
     knownProviders: [],
+    plans: {},
   }, bj(2026, 8, 19, 22, 0))
   assert.ok(Math.abs(normalized.store.sessions.current.official.cost - 54.45) < 1e-12)
   assert.equal(normalized.migrated, false)
@@ -635,7 +638,7 @@ test('legacy stores migrate once and malformed counters are sanitized', () => {
   }
   const first = normalizeStoreData(legacy, bj(2026, 8, 17, 22, 0))
   assert.equal(first.migrated, true)
-  assert.equal(first.store.version, 3)
+  assert.equal(first.store.version, 4)
   assert.equal(first.store.thresholds.CNY, 7.25)
   assert.equal(first.store.sessions.old.official.cost, 18.15)
   assert.equal(first.store.sessions.old.official.models['deepseek-v4-pro'].cacheWrite, 0)
@@ -1487,7 +1490,7 @@ test('wallet HTTP routes enforce methods, bounded inputs, and session identifier
           return () => routes.delete(definition.path)
         },
       },
-    }, { pricingSync: false })
+    }, { pricingSync: false, planSync: false })
 
     async function call(path, method, body, url = path) {
       const handler = routes.get(path)
@@ -1851,7 +1854,7 @@ function installWalletRouteHarness(mod, credentials) {
       },
     },
   }
-  mod.apply(ctx, { pricingSync: false })
+  mod.apply(ctx, { pricingSync: false, planSync: false })
   async function call(path, method, body, url = path) {
     const handler = routes.get(path)
     assert.equal(typeof handler, 'function', `missing route ${path}`)
@@ -2810,4 +2813,78 @@ test('storage falls back to memory readably when the native write is refused', (
   assert.equal(adapter.storage.getItem('dshw-peak-dock-v1'), 'sidebar', 'the refused write must still read back from memory')
   adapter.storage.removeItem('dshw-peak-dock-v1')
   assert.equal(adapter.storage.getItem('dshw-peak-dock-v1'), 'stale-native-value', 'after removal the native value is authoritative again')
+})
+
+test('plan quota card renders official windows, hides credentials, and stays collapsible', async () => {
+  const renderer = createHookRenderer()
+  const payload = {
+    ok: true,
+    configuredCount: 1,
+    availableCount: 1,
+    refreshing: false,
+    sources: [
+      {
+        id: 'zai-global',
+        name: 'Z.ai Coding Plan（全球）',
+        region: 'global',
+        sourceDomain: 'api.z.ai',
+        configured: false,
+        available: false,
+        refreshing: false,
+        error: 'missing-credential',
+        limits: [],
+      },
+      {
+        id: 'zai-cn',
+        name: 'Z.ai Coding Plan（中国）',
+        region: 'cn',
+        sourceDomain: 'open.bigmodel.cn',
+        configured: true,
+        available: true,
+        refreshing: false,
+        error: null,
+        level: 'pro',
+        fetchedAt: Date.UTC(2026, 7, 23, 12),
+        limits: [
+          { id: 'tokens-5h', kind: 'tokens', window: '5h', percentage: 42, used: null, total: null, remaining: null, resetAt: null },
+          { id: 'tools-month', kind: 'tools', window: 'month', percentage: 93, used: 93, total: 100, remaining: 7, resetAt: Date.UTC(2026, 8, 1, 0) },
+        ],
+      },
+    ],
+  }
+  const requests = []
+  const mockFetch = (url, options) => {
+    requests.push({ url: String(url), method: options && options.method ? options.method : 'GET' })
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) })
+  }
+  const { exports } = loadClientBundle(renderer.React, { fetch: mockFetch })
+  const Panel = exports.__testing.PlanUsagePanel
+  assert.equal(typeof Panel, 'function', 'PlanUsagePanel must be exported for render coverage')
+
+  renderer.render(Panel, { compact: false }, { flushEffects: true })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  const tree = renderer.render(Panel, { compact: false })
+  const text = JSON.stringify(tree)
+  assert.equal(requests.length, 1, 'the first load must be a single read-only query')
+  assert.equal(requests[0].url, '/api/wallet/plans')
+  assert.equal(requests[0].method, 'GET')
+  assert.match(text, /套餐额度/)
+  assert.match(text, /5 小时窗口/, 'the 5-hour token window must be labeled')
+  assert.match(text, /1 个月窗口/, 'the monthly tool window must be labeled')
+  assert.match(text, /42%/, 'token usage percentage must render')
+  assert.match(text, /未配置/, 'an unconfigured plan must be reported instead of guessed')
+  assert.match(text, /open\.bigmodel\.cn/, 'each source must name the official domain it queried')
+  assert.doesNotMatch(text, /¥|\$/, 'subscription quota must never be converted into currency balance')
+  const bar = findElement(tree, (element) => element.props && element.props.role === 'progressbar')
+  assert.ok(bar, 'quota windows render as accessible progress bars')
+  assert.equal(bar.props['aria-valuenow'], 42)
+
+  const compactRenderer = createHookRenderer()
+  const compactBundle = loadClientBundle(compactRenderer.React, { fetch: mockFetch })
+  const compactTree = compactRenderer.render(compactBundle.exports.__testing.PlanUsagePanel, { compact: true })
+  assert.ok(findElement(compactTree, (element) => element.type === 'button' && element.props['aria-label'] === '查看套餐额度'), 'compact surfaces keep the plan card collapsible')
+
+  const clientSource = readProjectFile('lib/client.js')
+  assert.match(clientSource, /key: 'plans', compact: false/, 'wallet settings shows the expanded plan card')
+  assert.match(clientSource, /key: 'plans-compact', compact: true/, 'the chip panel keeps a collapsible plan card')
 })
