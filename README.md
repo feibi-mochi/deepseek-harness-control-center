@@ -22,8 +22,8 @@
 余额 ¥5.89 · 本场 ¥0.72 · 官 18.8M | 三方 800K · ↗充
 ```
 
-- **Official DeepSeek** — live balance (60s global refresh with fast boot retries), current-session cost locked to the price active for each usage event (including the 2026-08-17 peak/off-peak rollout), and token breakdown.
-- **24h peak/off-peak ring clock** — resident sidebar footer widget indicating real-time pricing windows (peak vs. 50% discount off-peak), countdown to next switch, and optional desktop switch notifications.
+- **Official DeepSeek** — live balance (60s global refresh with fast boot retries), an estimated current-session cost (not an official bill) locked to the price active for each usage event, including the 2026-08-17 peak/off-peak rollout, and token breakdown.
+- **v4 peak/off-peak ring clock** — a resident 24-hour sidebar footer widget for `v4-flash` and `v4-pro`, indicating real-time pricing windows (peak vs. 50% discount off-peak), countdown to the next switch, and optional desktop switch notifications. Other models keep their flat rates.
 - **Third-party total** — current-session tokens (input / cache read / output). No balance guessing, no cost math, zero configuration.
 - **Provider classification** — observed wrapper routes appear in the settings page; opted-in routes join the official token/cost bucket and are priced with the official table.
 - **Click the chip** to open the detail panel: correctly formatted per-currency balances, cost and token splits, a freely editable low-balance threshold for the active account and currency (two decimals, persisted per account; alerts never mix currencies), manual refresh, and a jump to the official recharge page (first click shows the domain for confirmation — anti-phishing).
@@ -34,13 +34,14 @@
 - **Low-balance alert** — below the threshold the chip turns red with a breathing animation and fires one desktop notification; it resets automatically once the balance recovers.
 - **Theme-native UI** — built entirely on `--dsw-alias-*` theme variables, so light and dark themes both render correctly; the panel closes when you click outside and flips open-direction near screen edges.
 - **Clear current-session wallet data** — one button clears only the open conversation's token/cost records; it does not delete the conversation, and every other conversation is untouched.
-## Multi-account
 
-- Open the wallet panel → **账户管理** to add accounts (name + API key), switch the active one, or remove them.
+## Multi-account
+
+- Open the wallet panel → **Account Management（账户管理）** to add accounts (name + API key), switch the active one, or remove them.
 - The first account added becomes the active account automatically and is synced into the credentials seam.
 - Switching prompts a confirmation because it changes **LLM billing** for subsequent requests: the switch writes the account key into the credentials seam (`credentials.set('DEEPSEEK_API_KEY', ...)`), and since the llm-deepseek provider route resolves that reference per request, the very next LLM call is billed with the new account — no restart needed.
-- Account keys are stored plaintext in `$DSH_HOME/storages/accounts.json`; the UI only ever shows masked keys. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
-- Session cost follows the active account's currency: USD-settled accounts show `本约 $x` — a clearly-labeled estimate converted from the CNY price table at the vendor's long-standing list ratio (not a live FX rate); CNY accounts show the exact `本场 ¥x`.
+- Account keys are stored in plaintext in `$DSH_HOME/storages/accounts.json`; the UI only shows masked keys. Treat the DSH data directory as a local credential store and protect access to it. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
+- Session usage estimates follow the active account's currency: USD-settled accounts show `本约 $x`, converted from the CNY price table at the vendor's long-standing list ratio (not a live FX rate); CNY accounts show `本场 ¥x`. These are local estimates, not an official invoice.
 - If `DEEPSEEK_API_KEY` is supplied by the launching environment, switching is refused with a clear error (the credentials provider rejects shadowed writes) — unset it in your shell to enable switching.
 
 
@@ -77,6 +78,14 @@ dsh plugin --profile web add github:feibi-mochi/deepseek-harness-control-center
 ```
 
 Restart `dsh web`, then hard-refresh the page.
+
+## Quick use
+
+1. Click the wallet or peak/off-peak card to open its control panel.
+2. Choose horizontal or vertical layout, then use the scale control between 100% and 120%.
+3. Turn the official recharge button off when you need a smaller card; official and third-party rows can also be shown independently.
+4. Drag the card to any open area. If it is hard to find after a layout change, use **Reset/Dock（归位/停靠）** in the panel to return it to the sidebar.
+5. The card follows the host light/dark theme. A hard refresh after upgrading makes sure the new client bundle is loaded.
 
 ### Update
 
@@ -129,8 +138,8 @@ For buildable DSH hosts, the npm package and repository include a versioned [Age
 | Item | Behavior |
 | --- | --- |
 | Token accounting | Listens to the `llm/stream` event and buckets per session and provider: `deepseek-official` plus explicitly opted-in wrapper routes use the official bucket; other providers stay third-party; each usage event also locks its contemporaneous official price, so multiple sessions and pricing windows never mix. |
-| Balance | The key from the credentials seam (or the active account's key) never leaves this machine except as the `Authorization` header of the official `/user/balance` request. |
-| Accounts | Keys live in `$DSH_HOME/storages/accounts.json` (plaintext, matching the harness's own credential storage); the UI only ever shows masked keys, and switching writes the chosen key into the credentials seam for LLM billing. |
+| Balance | The wallet plugin itself sends the active key directly only to the official `/user/balance` endpoint. When multi-account switching is enabled, the selected key is also written into the DSH credentials seam; DSH may then use it for subsequent model requests. |
+| Accounts | Keys live in `$DSH_HOME/storages/accounts.json` in plaintext, matching the harness's own credential storage. The UI only shows masked keys, and switching writes the chosen key into the credentials seam for subsequent LLM billing. Protect the DSH data directory as you would any local credential store. |
 | Session log | The plugin writes no events; its data lives in `$DSH_HOME/storages/wallet.json`. |
 | Local settings | Layout, scale, visibility, reminder, and panel settings stay in browser-compatible local storage. |
 | Permanent deletion | Opt-in and host-gated. The wallet never advertises the action unless the host implements the matching session deletion path. |
