@@ -72,7 +72,7 @@ All notable changes to this project are documented in this file.
 - 标签上「本场」恢复常显（¥0.00 也显示，新会话不再缺席）；仅未定价模型仍隐藏。/ The chip shows the session cost again even at ¥0.00; only unpriced models stay hidden.
 - 面板/浮动窗版本号移至底部右下角，不再与顶栏按钮挤压。 / Panel version tags moved to the footer, clear of the header buttons.
 
-## 0.2.0 - 2026-08-18
+## 0.2.0 - 2026-08-19
 
 - 新增多账户管理与热切换：面板内“账户管理”可添加多个账户（名称 + API Key），切换后无需重启，下一次 LLM 调用即按新账户计费；key 界面掩码显示，余额查询跟随当前账户（contributed in PR #4 by mxchen-xyz）。 / Added multi-account management with hot switching: manage accounts in the panel, and the very next LLM call is billed with the newly activated key — no restart needed; keys stay masked in the UI and balance follows the active account.
 - 面板视觉重做：余额横排摘要卡、设置合并为分组卡片（胶囊开关、行内滑块、阈值保存贴边）、账户列表限高两行滚动、主操作并列与安静的清除入口。 / Restyled the panel: horizontal balance summary card, grouped settings card (chip toggles, inline slider, threshold save inline), two-row scrollable account list, and paired primary actions with a quiet destructive entry.
@@ -80,8 +80,10 @@ All notable changes to this project are documented in this file.
 - 设置页钱包页两列网格布局铺满宿主内容列，余额行横排。 / The settings wallet page lays controls out in a two-column grid that fills the host settings column.
 - 会话花费跟随当前账户货币：美元账户显示「本约 $x」（按 CNY 价折算的估算值，标签承担约算含义），人民币账户显示精确的「本场 ¥x」。 / Session cost follows the active account currency: USD accounts show 本约 $x (a labeled estimate converted from the CNY table), CNY accounts show the exact 本场 figure.
 - 芯片上低于显示精度的会话花费（如 $0.00）直接隐藏，面板照常显示，高缩放下更容易保持完整布局。 / Sub-cent session spend is hidden on the chip (kept in panels) so the full layout survives high scale factors.
-- 输入框位置缩放上限进一步收紧为 105%（悬浮/侧边仍 125%）。
-- 包装官方的路由（如 dsh-vision-proxy 的 deepseek-vision）可勾选计入官方计费桶：设置页新增「Provider 分桶」，自动列出出现过的 provider，勾选即按官方价格计入本场花费（Fixes #21, reported by @wenjie0112）。 / Wrapper provider routes (e.g. deepseek-vision from dsh-vision-proxy) can be checked into the official billing bucket: the settings page gains a Provider section listing observed providers; checked ones bill officially. / The composer-docked scale cap tightens to 105% (floating and side docks keep 125%).
+- 输入框位置缩放上限进一步收紧为 105%（悬浮/侧边仍 125%）。 / Tightened the composer-docked scale cap to 105%, while floating and side docks retain 125%.
+- 包装官方的路由（如 dsh-vision-proxy 的 deepseek-vision）可勾选计入官方计费桶：设置页新增「Provider 分桶」，自动列出出现过的 provider，勾选即按官方价格计入本场花费（Fixes #21, reported by @wenjie0112）。 / Wrapper provider routes (e.g. deepseek-vision from dsh-vision-proxy) can be checked into the official billing bucket: the settings page gains a Provider section listing observed providers; checked ones bill officially.
+- 账户激活通过宿主凭据接口写入 `DEEPSEEK_API_KEY`；若启动环境变量覆盖该值，则安全拒绝切换，避免显示虚假的激活状态。 / Account activation writes through the host credentials seam and safely refuses switching when a launch-time environment variable shadows `DEEPSEEK_API_KEY`.
+- 新增账户列表、激活和移除 API，并补充账户存储辅助函数测试。 / Added account list, activation, and removal APIs with account-store helper coverage.
 
 ## 0.1.5 - 2026-08-18
 
@@ -104,13 +106,6 @@ All notable changes to this project are documented in this file.
 - Replaced screenshot-dependent README sections with detailed English and Chinese product introductions, package-safe language navigation, explicit compatibility evidence levels, and clearer trust and host-capability boundaries.
 - Expanded the zero-dependency test suite with release metadata, documentation-resource, HTTP route-boundary, layout, reminder, desktop fallback, and capability-gating checks; added exact npm archive verification for the 0.1.4 release candidate.
 - Expanded validation to Windows, Ubuntu, and macOS on Node 22.19 and 24, added cross-platform reference-patch checks and focused DSH deletion-chain tests, and added npm OIDC trusted publishing for formal GitHub Releases.
-
-## 0.2.0 - 2026-08-16
-
-- Added multi-account management: add / list / remove multiple DeepSeek accounts from the wallet panel's 账户管理 section; keys are stored in `$DSH_HOME/storages/accounts.json` and the UI only shows masked keys.
-- Added hot account switching: activating an account writes its key into the credentials seam (`credentials.set('DEEPSEEK_API_KEY', ...)`), so the next LLM request is billed with the new account without a restart. Balance lookups prefer the active account's key and fall back to the credentials seam when no account is active.
-- The first account added becomes the active account automatically; switching is refused with a clear error when `DEEPSEEK_API_KEY` is supplied by the launching environment (shadowed writes are rejected by the credentials provider).
-- Added `GET/POST /api/wallet/accounts`, `POST /api/wallet/accounts/activate`, and `POST /api/wallet/accounts/remove` routes, plus unit tests for the account store helpers.
 
 ## 0.1.3 - 2026-08-16
 
