@@ -78,7 +78,9 @@ export const PRICE_POLICIES = [
 export function ratesFor(model, atMs) {
   let entry
   for (const policy of PRICE_POLICIES) {
-    if (atMs >= policy.since && policy.models[model] !== undefined) entry = policy
+    // Own-property check: a model named `__proto__`/`toString` would otherwise
+    // resolve to an Object.prototype member and produce NaN costs.
+    if (atMs >= policy.since && Object.hasOwn(policy.models, model)) entry = policy
   }
   if (entry === undefined) return null
   const rates = entry.models[model]
@@ -258,9 +260,10 @@ function persistStore(logger) {
     saveTimer = null
   }
   try {
-    mkdirSync(dirname(STORE_PATH), { recursive: true })
+    mkdirSync(dirname(STORE_PATH), { recursive: true, mode: 0o700 })
     const tmp = STORE_PATH + '.tmp'
-    writeFileSync(tmp, JSON.stringify(store))
+    // Owner-only: the store carries usage accounting next to credential files.
+    writeFileSync(tmp, JSON.stringify(store), { mode: 0o600 })
     renameSync(tmp, STORE_PATH)
   } catch (error) {
     if (logger && typeof logger.warn === 'function') {
@@ -325,9 +328,10 @@ function persistAccounts(logger) {
     accountsSaveTimer = null
   }
   try {
-    mkdirSync(dirname(ACCOUNTS_PATH), { recursive: true })
+    mkdirSync(dirname(ACCOUNTS_PATH), { recursive: true, mode: 0o700 })
     const tmp = ACCOUNTS_PATH + '.tmp'
-    writeFileSync(tmp, JSON.stringify(accounts))
+    // This file holds plaintext API keys: owner-only, never group/world readable.
+    writeFileSync(tmp, JSON.stringify(accounts), { mode: 0o600 })
     renameSync(tmp, ACCOUNTS_PATH)
   } catch (error) {
     if (logger && typeof logger.warn === 'function') {
@@ -436,15 +440,20 @@ async function resolveBalanceKey(ctx) {
  */
 export async function activateAccount(ctx, id) {
   const account = findAccount(id)
-  if (account === null) return { ok: false, error: 'account not found' }
+  if (account === null) return { ok: false, error: 'account-not-found' }
   const credentials = ctx.get('credentials')
-  if (credentials === undefined) return { ok: false, error: 'credentials service unavailable' }
+  if (credentials === undefined) return { ok: false, error: 'credentials-unavailable' }
   try {
     await credentials.set(CREDENTIAL_REF, account.apiKey)
   } catch (error) {
     // e.g. the launching environment supplies DEEPSEEK_API_KEY read-only, so
-    // the write is shadowed and refused by the credentials provider.
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    // the write is shadowed and refused by the credentials provider. Keep the
+    // browser error bounded and do not log provider text that might contain
+    // paths, environment details, or key fragments.
+    if (ctx.logger && typeof ctx.logger.warn === 'function') {
+      ctx.logger.warn('dsh-wallet: credential write refused')
+    }
+    return { ok: false, error: 'credential-write-refused' }
   }
   accounts.activeId = account.id
   scheduleAccountsSave(ctx.logger)
@@ -509,12 +518,12 @@ let balance = { fetchedAt: 0, available: false, balances: [], error: null }
 let balanceRefresh = null
 
 async function performBalanceRefresh(ctx) {
-  const credentials = ctx.get('credentials')
-  if (credentials === undefined) {
-    balance = { fetchedAt: Date.now(), available: false, balances: [], error: 'no-credentials' }
-    return
-  }
   try {
+    const credentials = ctx.get('credentials')
+    if (credentials === undefined) {
+      balance = { fetchedAt: Date.now(), available: false, balances: [], error: 'no-credentials' }
+      return
+    }
     const key = await resolveBalanceKey(ctx)
     if (key === undefined || key === '') {
       balance = { fetchedAt: Date.now(), available: false, balances: [], error: 'no-api-key' }
@@ -564,9 +573,24 @@ async function performBalanceRefresh(ctx) {
 
 function refreshBalance(ctx) {
   if (balanceRefresh !== null) return balanceRefresh
-  balanceRefresh = performBalanceRefresh(ctx).finally(() => {
-    balanceRefresh = null
-  })
+  // Never let a refresh escape as an unhandled rejection: every caller uses
+  // `void refreshBalance(ctx)`, so a throw here would take the host process
+  // down (Node exits on unhandled rejections). Absorb it into the error state.
+  balanceRefresh = performBalanceRefresh(ctx)
+    .catch((error) => {
+      balance = {
+        fetchedAt: Date.now(),
+        available: false,
+        balances: [],
+        error: 'balance-unavailable',
+      }
+      if (ctx && ctx.logger && typeof ctx.logger.warn === 'function') {
+        ctx.logger.warn('dsh-wallet: balance refresh failed')
+      }
+    })
+    .finally(() => {
+      balanceRefresh = null
+    })
   return balanceRefresh
 }
 
@@ -609,8 +633,18 @@ function balanceTotal() {
 
 function sessionView(sessionId) {
   if (sessionId === undefined || sessionId === '') return { official: null, third: null }
+  // Own-property lookup only: session ids like `__proto__`, `constructor` or
+  // `toString` otherwise resolve to an Object.prototype member, slip past the
+  // undefined guard, and throw inside bucketTotals.
+  if (!Object.prototype.hasOwnProperty.call(store.sessions, sessionId)) {
+    return { official: null, third: null }
+  }
   const session = store.sessions[sessionId]
-  if (session === undefined) return { official: null, third: null }
+  if (session === null || typeof session !== 'object'
+    || session.official === null || typeof session.official !== 'object'
+    || session.third === null || typeof session.third !== 'object') {
+    return { official: null, third: null }
+  }
   const official = bucketTotals(session.official)
   const third = bucketTotals(session.third)
   return {
