@@ -2888,3 +2888,35 @@ test('plan quota card renders official windows, hides credentials, and stays col
   assert.match(clientSource, /key: 'plans', compact: false/, 'wallet settings shows the expanded plan card')
   assert.match(clientSource, /key: 'plans-compact', compact: true/, 'the chip panel keeps a collapsible plan card')
 })
+
+test('composer wallet follows the selected provider instead of showing DeepSeek controls everywhere', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const snapshot = {
+    providers: { builtinOfficial: 'deepseek-official', official: ['deepseek-wrapper'] },
+  }
+  assert.equal(exports.__testing.providerModeFor(
+    { provider: 'zai-coding-cn', model: 'glm-5.2' }, snapshot, true,
+  ).kind, 'zai')
+  assert.equal(exports.__testing.providerModeFor(
+    { provider: 'openrouter', model: 'other-model' }, snapshot, true,
+  ).kind, 'third')
+  assert.equal(exports.__testing.providerModeFor(
+    { provider: 'deepseek-official', model: 'deepseek-v4-flash' }, snapshot, true,
+  ).kind, 'deepseek')
+  assert.equal(exports.__testing.providerModeFor(
+    { provider: 'deepseek-wrapper', model: 'deepseek-v4-flash-vision-exp' }, snapshot, true,
+  ).kind, 'deepseek')
+
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /if \(providerMode\.kind !== 'deepseek'\) return null/, 'the peak clock disappears outside DeepSeek')
+  assert.match(source, /if \(modelAware && !\/\^deepseek-v4-\//, 'the peak clock is limited to the V4 pricing family')
+  assert.match(source, /activeProviderMode\.kind === 'zai'/, 'the composer chip has a Z.ai-specific presentation')
+  assert.match(source, /'5h ' \+ planTokenPercent/, 'the Z.ai chip shows the five-hour quota')
+  assert.match(source, /'MCP ' \+ planToolPercent/, 'the Z.ai chip shows monthly tool quota')
+  assert.match(source, /showDeepSeek \? React\.createElement\('button'/, 'recharge is gated by the selected provider')
+  assert.match(source, /modelDirectories\.directoryFor\(sessionId\)/, 'the chip reads the host model-selection service')
+
+  const pkg = JSON.parse(readProjectFile('package.json'))
+  assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-model-selection'))
+})
