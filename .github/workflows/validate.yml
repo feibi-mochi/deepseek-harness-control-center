@@ -17,8 +17,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node: [22.19.0, 24]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
       - name: Validate package metadata
@@ -32,7 +32,7 @@ jobs:
       - name: Verify exact publishable package
         run: npm run check:pack
       - name: Check out the pinned DSH reference baseline
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: deepseek-ai/DeepSeek-Harness
           ref: 47f943859bef60e4160492346772ded9b24f765a
@@ -46,12 +46,12 @@ jobs:
     name: DSH reference deletion tests · Ubuntu · Node 24
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Check out the pinned DSH reference baseline
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: deepseek-ai/DeepSeek-Harness
           ref: 47f943859bef60e4160492346772ded9b24f765a

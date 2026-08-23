@@ -35,10 +35,10 @@ jobs:
           test "$(jq -r .prerelease <<<"$RELEASE_JSON")" = "false"
           test "$(jq -r .tag_name <<<"$RELEASE_JSON")" = "$TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.release.outputs.tag }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Install npm with trusted-publishing support
