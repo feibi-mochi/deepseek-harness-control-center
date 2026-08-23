@@ -233,7 +233,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.2.5')
+  assert.equal(pkg.version, '0.2.6')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -362,6 +362,15 @@ test('isBeijingPeak: peak windows are 09:00-12:00 and 14:00-18:00 Beijing', () =
   // UTC sanity: 09:00 Beijing == 01:00 UTC.
   assert.equal(isBeijingPeak(Date.UTC(2026, 7, 17, 1, 0)), true)
   assert.equal(isBeijingPeak(Date.UTC(2026, 7, 16, 18, 0)), false)
+})
+
+test('isBeijingPeak: weekends become all-day off-peak from 2026-08-23', () => {
+  // The official change takes effect at 2026-08-23 00:00 Beijing
+  // (2026-08-22T16:00Z): Saturday and Sunday no longer enter peak pricing.
+  assert.equal(isBeijingPeak(bj(2026, 8, 28, 10, 0)), true, 'Friday remains peak at 10:00')
+  assert.equal(isBeijingPeak(bj(2026, 8, 29, 10, 0)), false, 'Saturday is all-day off-peak')
+  assert.equal(isBeijingPeak(bj(2026, 8, 30, 10, 0)), false, 'Sunday is all-day off-peak')
+  assert.equal(isBeijingPeak(bj(2026, 8, 31, 10, 0)), true, 'Monday resumes weekday peak pricing')
 })
 
 test('ratesFor: flat v4 rates before the peak/off-peak rollout', () => {
@@ -1896,6 +1905,19 @@ test('peakClockState wraps midnight, keys reminders, and reads IANA wall time', 
   assert.equal(neutral.configured, false)
   assert.match(neutral.tip, /计费时段未配置/)
   assert.equal(neutral.periodId, null, 'no reminder fires without a policy')
+  const weekend = state({
+    timezone: 'Asia/Shanghai', offsetMinutes: 480,
+    windows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+    offPeakRate: 0.5, weekendOffPeak: true,
+  }, 10, Date.parse('2026-08-22T02:00:00Z'))
+  assert.equal(weekend.configured, true, 'weekend policy remains configured')
+  assert.equal(weekend.inPeak, false, 'weekend never enters peak')
+  assert.equal(weekend.weekendOffPeak, true)
+  assert.equal(weekend.windows.length, 0, 'weekend ring has no peak arcs')
+  assert.match(weekend.tip, /周一 09:00 恢复标准价/)
+  assert.match(weekend.windowSummary, /周末全天低谷/)
+  const weekendRing = exports.__testing.peakRingSVG([], 10, 76, weekend.ariaText, true)
+  assert.ok(findElement(weekendRing, (el) => el.props && String(el.props.className || '').includes('dshw_ringOff')), 'weekend ring renders a full off-peak arc')
   // IANA wall time: Beijing 11:30 read from a UTC instant, plus offset fallback.
   const bjHour = wallHourIn('Asia/Shanghai', 480, new Date('2026-08-20T03:30:00Z'))
   assert.ok(Math.abs(bjHour - 11.5) < 0.01, 'Asia/Shanghai hour comes from IANA conversion')

@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.6 - 2026-08-23
+
+- 跟随 DeepSeek 官方规则更新峰谷计费：自 2026-08-23 北京时间 00:00 起，周六、周日全天按低谷价计费；工作日高峰仍为 09:00–12:00、14:00–18:00。 / Updated peak/off-peak billing to match DeepSeek's official rule: from 2026-08-23 00:00 Beijing, Saturday and Sunday are all-day off-peak; weekday peak windows remain 09:00–12:00 and 14:00–18:00.
+- 环形卡片同步显示周末全天低谷，并将倒计时指向下一个工作日 09:00。 / Updated the ring card to show weekend all-day off-peak and count down to the next weekday 09:00.
+
 ## 0.2.5 - 2026-08-23
 
 - 修复浮动峰谷卡片在窗口缩放、卡片放大或历史坐标过期后可能跑出视口的问题；加载、缩放、排版切换和 resize 都会重新钳制位置。 / Fixed floating peak cards escaping the viewport after resize, scale changes, or stale saved coordinates; load, scale, layout changes, and resize now re-clamp the position.

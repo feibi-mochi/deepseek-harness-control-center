@@ -35,14 +35,24 @@ const DEFAULT_THRESHOLD = 5
 const BALANCE_REFRESH_MS = 60_000
 const STORE_VERSION = 2
 
-// Beijing (UTC+8, no DST) peak windows: 09:00-12:00 and 14:00-18:00.
+// Beijing (UTC+8, no DST) weekday peak windows: 09:00-12:00 and 14:00-18:00.
+// From 2026-08-23 00:00 Beijing, Saturday and Sunday are off-peak all day.
 // Exposed to clients via snapshot.pricingWindows so the ring clock renders
 // from the active policy instead of hard-coding hours in the bundle.
 const PEAK_WINDOWS = [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }]
 const OFF_PEAK_RATE = 0.5
 const BEIJING_OFFSET_MS = 8 * 3600_000
+const WEEKEND_OFF_PEAK_SINCE = Date.UTC(2026, 7, 22, 16)
+
+function isBeijingWeekend(atMs) {
+  if (!Number.isFinite(atMs)) return false
+  const beijingDate = new Date(atMs + BEIJING_OFFSET_MS)
+  const day = beijingDate.getUTCDay()
+  return day === 0 || day === 6
+}
 
 export function isBeijingPeak(atMs) {
+  if (atMs >= WEEKEND_OFF_PEAK_SINCE && isBeijingWeekend(atMs)) return false
   const hours = ((atMs + BEIJING_OFFSET_MS) % 86_400_000) / 3_600_000
   return (hours >= 9 && hours < 12) || (hours >= 14 && hours < 18)
 }
@@ -661,6 +671,7 @@ function sessionView(sessionId) {
 function snapshotView(sessionId) {
   const currency = balanceCurrency(balance.balances)
   const active = activeAccount()
+  const now = Date.now()
   return {
     ok: true,
     balance: {
@@ -692,7 +703,9 @@ function snapshotView(sessionId) {
       offsetMinutes: 480,
       windows: PEAK_WINDOWS.map(w => ({ startHour: w.startHour, endHour: w.endHour })),
       offPeakRate: OFF_PEAK_RATE,
-      isPeak: isBeijingPeak(Date.now()),
+      isPeak: isBeijingPeak(now),
+      weekendOffPeak: now >= WEEKEND_OFF_PEAK_SINCE && isBeijingWeekend(now),
+      weekendOffPeakSince: WEEKEND_OFF_PEAK_SINCE,
     },
     accounts: {
       activeId: accounts.activeId,
