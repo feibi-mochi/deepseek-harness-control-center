@@ -1423,6 +1423,38 @@ test('wallet details minimize directly to a freely movable dot', () => {
   assert.match(dot.props.className, /dshw_dot/)
 })
 
+test('wallet details expose an obvious drag handle and manual DeepSeek/Z.ai views', () => {
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const { Component } = walletComponent(exports)
+
+  let tree = renderer.render(Component, { sessionId: 'session-panel-switch' })
+  findElement(tree, (element) => element.type === 'button' && element.props.className === 'dshw_chipMain').props.onClick()
+  tree = renderer.render(Component, { sessionId: 'session-panel-switch' })
+
+  const dragHandle = findElement(tree, (element) => element.props && element.props['data-dshw-panel-drag-handle'] === 'true')
+  assert.ok(dragHandle)
+  assert.equal(typeof dragHandle.props.onPointerDown, 'function')
+  assert.match(JSON.stringify(dragHandle), /按住拖动/)
+
+  const switcher = findElement(tree, (element) => element.props && element.props['aria-label'] === '切换控制面板数据')
+  assert.ok(switcher)
+  let deepSeekButton = findElement(switcher, (element) => element.type === 'button' && element.props.children === 'DeepSeek')
+  let zaiButton = findElement(switcher, (element) => element.type === 'button' && element.props.children === 'Z.ai')
+  assert.equal(deepSeekButton.props['aria-pressed'], true)
+  assert.equal(zaiButton.props['aria-pressed'], false)
+
+  zaiButton.props.onClick()
+  tree = renderer.render(Component, { sessionId: 'session-panel-switch' })
+  const zaiPanel = findElement(tree, (element) => element.props && element.props['aria-label'] === 'Z.ai 套餐与用量明细')
+  assert.ok(zaiPanel, 'the Z.ai button changes only the panel view')
+  const switchedTabs = findElement(tree, (element) => element.props && element.props['aria-label'] === '切换控制面板数据')
+  deepSeekButton = findElement(switchedTabs, (element) => element.type === 'button' && element.props.children === 'DeepSeek')
+  zaiButton = findElement(switchedTabs, (element) => element.type === 'button' && element.props.children === 'Z.ai')
+  assert.equal(deepSeekButton.props['aria-pressed'], false)
+  assert.equal(zaiButton.props['aria-pressed'], true)
+})
+
 test('vertical docks place each value below its matching label', () => {
   const renderer = createHookRenderer()
   const { exports, window } = loadClientBundle(renderer.React)
@@ -1892,14 +1924,14 @@ test('provider classification UI states that history is not retroactively repric
   assert.match(readProjectFile('README.md'), /Existing history is not retroactively reclassified/)
   assert.match(readProjectFile('docs/i18n/README.zh-CN.md'), /既有历史不会追溯重分桶/)
 })
-test('provider aliases are actually billed in the official bucket after opt-in', async () => {
+test('provider aliases are billed after opt-in while plan providers stay isolated', async () => {
   const previousHome = process.env.DSH_HOME
   const dir = mkdtempSync(join(tmpdir(), 'dshw-provider-route-'))
   process.env.DSH_HOME = dir
   const mod = await import('../index.js?provider-route-' + dir.replace(/[\\/]/g, '_'))
   try {
     const harness = installWalletRouteHarness(mod, undefined)
-    let response = await harness.call('/api/wallet/official-providers', 'POST', { providers: ['deepseek-vision'] })
+    let response = await harness.call('/api/wallet/official-providers', 'POST', { providers: ['deepseek-vision', 'zai-coding-cn', 'zai'] })
     assert.deepEqual(response.json.official, ['deepseek-vision'])
     assert.equal(typeof harness.usageTap, 'function')
     const downstream = async function* () {
@@ -1920,6 +1952,24 @@ test('provider aliases are actually billed in the official bucket after opt-in',
     assert.ok(response.json.session.official.cost > 0)
     assert.equal(response.json.session.third.tokens.input, 0)
     assert.deepEqual(response.json.providers.known, [])
+
+    const zaiDownstream = async function* () {
+      yield { type: 'usage', usage: { inputTokens: 400, outputTokens: 200 } }
+    }
+    for await (const _ of harness.usageTap(
+      { sessionId: 'session-provider-route', provider: 'zai-coding-cn', model: 'glm-5.2' },
+      () => zaiDownstream(),
+    )) {}
+    response = await harness.call(
+      '/api/wallet/snapshot',
+      'GET',
+      undefined,
+      '/api/wallet/snapshot?session=session-provider-route',
+    )
+    assert.equal(response.json.session.official.tokens.input, 1000, 'Z.ai must not enter DeepSeek official usage')
+    assert.equal(response.json.session.third.tokens.input, 400)
+    assert.deepEqual(response.json.providers.official, ['deepseek-vision'])
+    assert.deepEqual(response.json.providers.known, [], 'plan providers must not appear as wrapper aliases')
   } finally {
     process.env.DSH_HOME = previousHome
     await new Promise(resolve => setTimeout(resolve, 550))
@@ -2385,20 +2435,64 @@ test('balance refresh returns safe error enums instead of upstream error text', 
   }
 })
 test('provider aliasing: wrapper routes can join the official bucket (Issue #21)', async () => {
-  const { isOfficialProvider, normalizeProviderList, normalizeStoreData } = await import('../index.js')
+  const { isOfficialProvider, isPlanProvider, normalizeProviderList, normalizeStoreData } = await import('../index.js')
   assert.equal(isOfficialProvider('deepseek-official'), true)
   assert.equal(isOfficialProvider('deepseek-official', []), true)
   assert.equal(isOfficialProvider('deepseek-vision'), false)
   assert.equal(isOfficialProvider('deepseek-vision', ['deepseek-vision']), true, 'a whitelisted wrapper route must bill officially')
   assert.equal(isOfficialProvider('deepseek-vision', 'deepseek-vision'), false, 'a non-array whitelist must not match')
+  assert.equal(isPlanProvider('zai'), true)
+  assert.equal(isPlanProvider('zai-coding-cn'), true)
+  assert.equal(isOfficialProvider('zai-coding-cn', ['zai-coding-cn']), false, 'subscription providers cannot become DeepSeek aliases')
 
   assert.deepEqual(normalizeProviderList(null), [])
-  assert.deepEqual(normalizeProviderList(['a', 'a', 'deepseek-official', 42, '']), ['a'], 'dedupe, drop junk and the builtin name')
+  assert.deepEqual(normalizeProviderList(['a', 'a', 'deepseek-official', 'zai', 'zai-coding-cn', 42, '']), ['a'], 'dedupe and drop junk, builtin, and plan providers')
   const withProviders = normalizeStoreData({ officialProviders: ['deepseek-vision'], knownProviders: ['deepseek-vision'] })
   assert.deepEqual(withProviders.store.officialProviders, ['deepseek-vision'])
   assert.deepEqual(withProviders.store.knownProviders, ['deepseek-vision'])
   const bare = normalizeStoreData({})
   assert.deepEqual(bare.store.officialProviders, [], 'old stores migrate with empty provider lists')
+
+  const atMs = Date.UTC(2026, 7, 25, 12)
+  const repaired = normalizeStoreData({
+    officialProviders: ['zai-coding-cn'],
+    knownProviders: ['zai-coding-cn'],
+    sessions: {
+      'legacy-zai': {
+        official: {
+          models: { 'glm-5.2': { input: 10, output: 20, cacheRead: 5, cacheWrite: 0, reasoning: 0 } },
+          cost: 0,
+          priced: false,
+          unpriced: 1,
+        },
+        third: { models: { 'glm-5.2': { input: 7, output: 3, cacheRead: 0, cacheWrite: 0, reasoning: 0 } } },
+      },
+    },
+    history: { events: {
+      legacy: {
+        occurredAt: atMs - 1000,
+        sessionId: 'legacy-zai',
+        provider: 'zai-coding-cn',
+        model: 'glm-5.2',
+        official: true,
+        priced: false,
+        cost: 9.99,
+        usage: { input: 10, output: 20, cacheRead: 5 },
+      },
+    } },
+  }, atMs)
+  assert.deepEqual(repaired.store.officialProviders, [])
+  assert.deepEqual(repaired.store.knownProviders, [])
+  const repairedEvent = Object.values(repaired.store.history.events)[0]
+  assert.equal(repairedEvent.official, false, 'legacy Z.ai history is repaired to third-party')
+  assert.equal(repairedEvent.priced, false)
+  assert.equal(repairedEvent.cost, null, 'a fabricated DeepSeek cost must not survive the repair')
+  assert.equal(repaired.store.sessions['legacy-zai'].official.models['glm-5.2'], undefined)
+  assert.equal(repaired.store.sessions['legacy-zai'].official.unpriced, 0)
+  assert.equal(repaired.store.sessions['legacy-zai'].official.priced, true)
+  assert.deepEqual(repaired.store.sessions['legacy-zai'].third.models['glm-5.2'], {
+    input: 17, output: 23, cacheRead: 5, cacheWrite: 0, reasoning: 0,
+  }, 'the current session moves the exact Z.ai contribution without losing existing third-party usage')
 })
 
 test('both panels surface the wallet version, locked to package.json', () => {
@@ -2614,6 +2708,10 @@ test('settings expose the ring switch and the switch-reminder toggle', () => {
   assert.ok(notifyToggle, 'the peak switch-reminder toggle must render in the settings quad')
   assert.equal(ringToggle.props.checked, true, 'the ring defaults to on')
   assert.equal(notifyToggle.props.checked, false, 'reminders stay opt-in')
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /当前 Z\.ai，已自动隐藏；切回 DeepSeek V4 恢复/, 'settings explains why an enabled clock is hidden for Z.ai')
+  assert.match(source, /sessionsService: ctx\.sessions/, 'the settings section receives the current-session service')
+  assert.match(source, /modelDirectories: ctx\.modelDirectories/, 'the settings section receives live model selection')
 })
 
 test('settings expose peak ring layout, scale slider (100-120%), recharge toggle and dock position', () => {

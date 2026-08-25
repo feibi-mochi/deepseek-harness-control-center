@@ -28,6 +28,10 @@ export const name = 'wallet'
 export const inject = ['webServer', 'credentials']
 
 const OFFICIAL_PROVIDER = 'deepseek-official'
+// Subscription-plan routes are independent providers. They may contribute to
+// the generic third-party token ledger, but they must never be promoted into
+// DeepSeek's official paid-API bucket by the wrapper-provider alias control.
+const PLAN_PROVIDER_IDS = new Set(PLAN_ADAPTERS.map((adapter) => adapter.provider))
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
 const PLUGIN_VERSION = '0.3.3'
 const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
@@ -612,7 +616,10 @@ function normalizeHistoryEvent(value, eventId, nowMs = Date.now()) {
   const model = boundedString(source.model, 160)
   if (day === null || sessionId === null || provider === null || model === null) return null
   const usage = historyUsageCounters(source.usage ?? source.counters)
-  const official = source.official === true
+  // Repair the brief v0.3.3 state where a Z.ai route could be checked as a
+  // DeepSeek official alias. Historical token counts remain intact, while the
+  // provider is moved back to the non-priced third-party side.
+  const official = !isPlanProvider(provider) && source.official === true
   const rawCost = Number(source.cost)
   const cost = official && source.priced === true && Number.isFinite(rawCost) && rawCost >= 0 ? rawCost : null
   const identity = source.identity !== null && typeof source.identity === 'object' ? source.identity : null
@@ -862,15 +869,59 @@ export function normalizeProviderList(value) {
     if (typeof item !== 'string' || item === '' || item.length > 100) continue
     if (item === '__proto__' || item === 'prototype' || item === 'constructor') continue
     if (item === OFFICIAL_PROVIDER) continue
+    if (isPlanProvider(item)) continue
     seen.add(item)
     if (seen.size >= 20) break
   }
   return [...seen]
 }
 
+export function isPlanProvider(provider) {
+  return typeof provider === 'string' && PLAN_PROVIDER_IDS.has(provider)
+}
+
 export function isOfficialProvider(provider, extraProviders) {
+  if (isPlanProvider(provider)) return false
   if (provider === OFFICIAL_PROVIDER) return true
   return Array.isArray(extraProviders) && extraProviders.includes(provider)
+}
+
+function repairPlanProviderSessionUsage(sessions, historySource, atMs) {
+  const rawEvents = historySource !== null && typeof historySource === 'object' && !Array.isArray(historySource)
+    && historySource.events !== null && typeof historySource.events === 'object' && !Array.isArray(historySource.events)
+    ? historySource.events
+    : {}
+  let repaired = 0
+  for (const [eventId, rawEvent] of Object.entries(rawEvents)) {
+    if (rawEvent === null || typeof rawEvent !== 'object' || Array.isArray(rawEvent) || rawEvent.official !== true) continue
+    const event = normalizeHistoryEvent(rawEvent, eventId, atMs)
+    if (event === null || !isPlanProvider(event.provider)) continue
+    const session = sessions[event.sessionId]
+    const official = session && session.official
+    const sourceCounters = official && official.models && official.models[event.model]
+    if (sourceCounters === null || typeof sourceCounters !== 'object') continue
+    const keys = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning']
+    // A cleared or partially rebuilt session must never be resurrected from
+    // history. Only move an event when its complete contribution is still
+    // present in the official aggregate.
+    if (!keys.every((key) => finiteCounter(sourceCounters[key]) >= finiteCounter(event.usage[key]))) continue
+    if (!keys.some((key) => finiteCounter(event.usage[key]) > 0)) continue
+    subtractUsage(sourceCounters, event.usage)
+    if (Object.values(sourceCounters).every((value) => finiteCounter(value) === 0)) delete official.models[event.model]
+    if (!Object.hasOwn(session.third.models, event.model)) session.third.models[event.model] = emptyCounters()
+    addUsage(session.third.models[event.model], event.usage)
+    const rawCost = Number(rawEvent.cost)
+    if (rawEvent.priced === true && Number.isFinite(rawCost) && rawCost >= 0) {
+      const currentCost = typeof official.cost === 'number' && Number.isFinite(official.cost) && official.cost >= 0 ? official.cost : 0
+      official.cost = Math.max(0, currentCost - rawCost)
+    } else {
+      const currentUnpriced = Number.isInteger(official.unpriced) && official.unpriced >= 0 ? official.unpriced : 0
+      official.unpriced = Math.max(0, currentUnpriced - 1)
+      official.priced = official.unpriced === 0
+    }
+    repaired += 1
+  }
+  return repaired
 }
 
 export function normalizeStoreData(value, atMs = Date.now()) {
@@ -899,7 +950,10 @@ export function normalizeStoreData(value, atMs = Date.now()) {
     knownProviders: normalizeProviderList(source.knownProviders),
     plans: normalizePlanSnapshotCache(source.plans, atMs),
   }
-  if (Object.hasOwn(source, 'history')) normalized.history = normalizeHistory(source.history, atMs)
+  if (Object.hasOwn(source, 'history')) {
+    normalized.history = normalizeHistory(source.history, atMs)
+    repairPlanProviderSessionUsage(normalized.sessions, source.history, atMs)
+  }
   return { store: normalized, migrated: JSON.stringify(source) !== JSON.stringify(normalized) }
 }
 
@@ -1616,7 +1670,7 @@ function recordUsage(options, usage, atMs = Date.now()) {
   if (sessionId === '__proto__' || sessionId === 'prototype' || sessionId === 'constructor') return
   // Remember every non-builtin route observed by the stream tap. The settings
   // page can then promote wrapper routes into the official billing bucket.
-  if (provider !== OFFICIAL_PROVIDER && !store.knownProviders.includes(provider)) {
+  if (provider !== OFFICIAL_PROVIDER && !isPlanProvider(provider) && !store.knownProviders.includes(provider)) {
     store.knownProviders = normalizeProviderList([...store.knownProviders, provider])
   }
   if (!Object.hasOwn(store.sessions, sessionId)) {
