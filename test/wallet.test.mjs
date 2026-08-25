@@ -2781,6 +2781,13 @@ test('peak ring footer supports vertical layout, hidden recharge, and floating m
   let floating = findElement(tree3, (el) => el.props && String(el.props.className || '').includes('dshw_footRingFloating'))
   let resetBtn = findElement(tree3, (el) => el.props && String(el.props.className || '').includes('dshw_footRingResetBtn'))
   assert.ok(resetBtn, 'floating card provides a reset dock button')
+
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /money\.scrollWidth > money\.clientWidth \+ 1/, 'the peak card reacts only when skin typography actually overflows')
+  assert.match(source, /countdown\.scrollWidth > countdown\.clientWidth \+ 1/, 'countdown fit is measured independently from card width')
+  assert.match(source, /\.dshw_footRingNarrow \.dshw_footRingMoney\{display:flex;flex-wrap:wrap;[^}]*text-overflow:clip;white-space:normal\}/, 'narrow money values wrap instead of ellipsizing')
+  assert.match(source, /\.dshw_footRingNarrow \.dshw_footRingCountdown\{[^}]*overflow:visible;text-overflow:clip;white-space:normal\}/, 'narrow countdown text remains complete')
+  assert.match(source, /dshw_footRingMoneyGroup/, 'balance and session cost stay in unbroken value groups')
 })
 
 test('dark mode theme compliance: client css avoids un-themed hardcoded white background fallbacks', () => {
@@ -3022,7 +3029,7 @@ test('composer wallet follows the selected provider instead of showing DeepSeek 
   assert.match(source, /activeProviderMode\.kind === 'zai'/, 'the composer chip has a Z.ai-specific presentation')
   assert.match(source, /'5h 剩' \+ planTokenRemaining/, 'the Z.ai chip shows remaining five-hour quota')
   assert.match(source, /'MCP 剩' \+ planToolRemaining/, 'the Z.ai chip shows remaining monthly tool quota')
-  assert.match(source, /showDeepSeek \? React\.createElement\('button'/, 'recharge is gated by the selected provider')
+  assert.match(source, /showDeepSeek && !balanceOnly \? React\.createElement\('button'/, 'recharge is gated by the selected provider and the balance-only preference')
   assert.match(source, /modelDirectories\.directoryFor\(sessionId\)/, 'the chip reads the host model-selection service')
   assert.match(source, /lowNoticeRef\.current\.close\(\)/, 'leaving DeepSeek closes a stale low-balance notice')
 
@@ -3030,22 +3037,30 @@ test('composer wallet follows the selected provider instead of showing DeepSeek 
   assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-model-selection'))
 })
 
-test('composer label supports standard, text-only, and hidden presentation modes', () => {
+test('composer label supports explicit visibility and primary-value-only controls', () => {
   const normalRenderer = createHookRenderer()
   const normalBundle = loadClientBundle(normalRenderer.React)
   assert.equal(normalBundle.exports.__testing.normalizeChipStyle(null), 'standard')
   assert.equal(normalBundle.exports.__testing.normalizeChipStyle('standard'), 'standard')
-  assert.equal(normalBundle.exports.__testing.normalizeChipStyle('text'), 'text')
+  assert.equal(normalBundle.exports.__testing.normalizeChipStyle('text'), 'standard', 'the removed text-only value migrates to a framed label')
   assert.equal(normalBundle.exports.__testing.normalizeChipStyle('hidden'), 'hidden')
   assert.equal(normalBundle.exports.__testing.normalizeChipStyle('unknown'), 'standard')
 
-  const textRenderer = createHookRenderer()
-  const textBundle = loadClientBundle(textRenderer.React)
-  textBundle.window.localStorage.setItem('dshw-chip-style-v1', 'text')
-  const textTree = textRenderer.render(textBundle.exports.__testing.WalletChip, { sessionId: 'session-style' })
-  const textChip = findElement(textTree, (element) => element.props && element.props['data-dshw-chip'] === 'text')
-  assert.ok(textChip, 'text mode keeps the composer label mounted')
-  assert.match(String(textChip.props.className), /dshw_chipTextOnly/)
+  const compactRenderer = createHookRenderer()
+  const compactBundle = loadClientBundle(compactRenderer.React)
+  compactBundle.window.localStorage.setItem('dshw-chip-balance-only-v1', 'true')
+  const compactTree = compactRenderer.render(compactBundle.exports.__testing.WalletChip, { sessionId: 'session-style' })
+  const compactChip = findElement(compactTree, (element) => element.props && element.props['data-dshw-balance-only'] === 'true')
+  assert.ok(compactChip, 'primary-value mode keeps one clickable framed label')
+  assert.match(String(compactChip.props.className), /dshw_chipBalanceOnly/)
+  assert.match(JSON.stringify(compactChip), /余额/)
+  assert.doesNotMatch(JSON.stringify(compactChip), /本场|官方|第三方|打开 DeepSeek 官方充值页/)
+
+  const legacyRenderer = createHookRenderer()
+  const legacyBundle = loadClientBundle(legacyRenderer.React)
+  legacyBundle.window.localStorage.setItem('dshw-chip-style-v1', 'text')
+  const legacyTree = legacyRenderer.render(legacyBundle.exports.__testing.WalletChip, { sessionId: 'session-legacy-style' })
+  assert.ok(findElement(legacyTree, (element) => element.props && element.props['data-dshw-balance-only'] === 'true'), 'the old text preference migrates to the intended primary-value view')
 
   const hiddenRenderer = createHookRenderer()
   const hiddenBundle = loadClientBundle(hiddenRenderer.React)
@@ -3055,12 +3070,9 @@ test('composer label supports standard, text-only, and hidden presentation modes
   const settingsRenderer = createHookRenderer()
   const settingsBundle = loadClientBundle(settingsRenderer.React)
   const settingsTree = settingsRenderer.render(settingsBundle.exports.__testing.WalletSettingsSection, { close: () => {} })
-  const styleSelect = findElement(settingsTree, (element) => element.type === 'select' && element.props['aria-label'] === '输入框标签样式')
-  assert.ok(styleSelect, 'settings exposes the composer label presentation choice')
-  const optionText = JSON.stringify(styleSelect)
-  assert.match(optionText, /标准/)
-  assert.match(optionText, /纯文字/)
-  assert.match(optionText, /隐藏/)
+  assert.ok(findElement(settingsTree, (element) => element.type === 'input' && element.props['aria-label'] === '显示输入框标签'))
+  assert.ok(findElement(settingsTree, (element) => element.type === 'input' && element.props['aria-label'] === '输入框标签仅显示余额'))
+  assert.doesNotMatch(JSON.stringify(settingsTree), /纯文字/)
 })
 
 test('maid-atelier compatibility prevents the skin from forcing the wallet button to 30px', () => {
@@ -3069,6 +3081,7 @@ test('maid-atelier compatibility prevents the skin from forcing the wallet butto
   assert.match(source, /background-clip:padding-box;[^}]*box-shadow:inset[^}]*backdrop-filter:none;isolation:isolate/, 'rounded skin background must not leak a rectangular blur or outer shadow')
   assert.match(source, /button\.dshw_chipMain\[aria-haspopup="dialog"\]\{[^}]*width:auto;[^}]*height:100%/, 'wallet sizing must outrank the skin context-meter selector')
   assert.match(source, /button\.dshw_chipMain\[aria-haspopup="dialog"\]:hover:not\(:disabled\)\{transform:none/, 'skin hover motion must not offset the chip inside its frame')
-  assert.match(source, /dshw_chipTextOnly/, 'the skin-compatible chip still supports borderless text mode')
+  assert.doesNotMatch(source, /dshw_chipTextOnly|纯文字/, 'the rejected borderless text mode stays removed')
+  assert.match(source, /dshw_chipBalanceOnly/, 'the skin-compatible chip supports a framed primary-value-only view')
   assert.match(source, /data-dshw-chip-main/, 'themes get a stable selector instead of guessing aria roles')
 })
