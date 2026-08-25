@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## 0.3.3 - 2026-08-23
+## 0.3.3 - 2026-08-25
 
 - 新增通用官方套餐适配器契约，并首批接入 Z.ai Coding Plan 全球区与中国区；每个来源固定绑定官方域名和独立的 DSH 凭据引用，浏览器不会收到 Key、接口路径或原始响应。 / Added a generic official subscription-plan adapter contract with initial Z.ai Coding Plan Global and China adapters; each source is pinned to its official domain and its own DSH credential reference, while the browser receives no key, endpoint path, or raw response.
 - 套餐页分别显示 5 小时模型 Token 额度与月度 MCP 工具额度，以从 100% 向下消耗的剩余比例为主，已用比例和可用时的已用/总量为辅，并显示重置时间、套餐等级、更新时间和来源域名；剩余不高于 50% 变黄、不高于 20% 变红，也不把套餐额度换算成人民币余额。 / The plan view separates the 5-hour model-token window from monthly MCP-tool quota, leading with remaining percentage that drains from 100% while retaining used percentage and available used/total values; it also shows reset time, plan level, update time, and source domain, turns yellow at 50% remaining and red at 20%, and never converts quota into currency.
