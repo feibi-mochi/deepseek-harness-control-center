@@ -2967,7 +2967,8 @@ test('composer label supports standard, text-only, and hidden presentation modes
 
 test('maid-atelier compatibility prevents the skin from forcing the wallet button to 30px', () => {
   const source = readProjectFile('lib/client.js')
-  assert.match(source, /body\[data-dsh-maid-atelier\] \.dshw_anchorHome\{min-height:38px\}/)
+  assert.match(source, /body\[data-dsh-maid-atelier\] \.dshw_anchorHome\{min-height:38px;border-radius:999px\}/)
+  assert.match(source, /background-clip:padding-box;[^}]*box-shadow:inset[^}]*backdrop-filter:none;isolation:isolate/, 'rounded skin background must not leak a rectangular blur or outer shadow')
   assert.match(source, /button\.dshw_chipMain\[aria-haspopup="dialog"\]\{[^}]*width:auto;[^}]*height:100%/, 'wallet sizing must outrank the skin context-meter selector')
   assert.match(source, /button\.dshw_chipMain\[aria-haspopup="dialog"\]:hover:not\(:disabled\)\{transform:none/, 'skin hover motion must not offset the chip inside its frame')
   assert.match(source, /dshw_chipTextOnly/, 'the skin-compatible chip still supports borderless text mode')
