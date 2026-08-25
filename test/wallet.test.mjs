@@ -3090,7 +3090,7 @@ test('maid-atelier compatibility prevents the skin from forcing the wallet butto
   assert.match(source, /\.dshw_modelMenuOpen \[role="menu"\]\{background:rgba\(232,238,249,\.98\)!important/, 'the light model menu uses an opaque readable surface')
   assert.match(source, /data-ds-dark-theme[^}]*\.dshw_modelMenuOpen \[role="menu"\]\{background:rgba\(24,40,80,\.98\)!important/, 'the dark model menu keeps its own opaque surface')
   assert.match(source, /installMaidModelMenuGuard/, 'a lifecycle guard projects menu state without :has support')
-  assert.match(source, /:not\(\[data-ds-dark-theme\]\) \.dshw_footRing\{[^}]*--dsw-alias-label-primary:#172347;[^}]*background:rgba\(238,243,252,\.95\)/, 'maid light peak cards establish dark labels on an opaque light surface')
+  assert.match(source, /:not\(\[data-ds-dark-theme\]\) \.dshw_footRing\{[^}]*--dsw-alias-label-primary:#f8f3e8;[^}]*background:linear-gradient\(145deg,rgba\(34,55,106,\.95\),rgba\(10,25,62,\.97\)\);[^}]*border-color:rgba\(225,191,124,\.62\)/, 'maid light mode keeps sidebar peak cards in the navy-and-gold workbar palette')
   assert.match(source, /\[data-ds-dark-theme\] \.dshw_footRing\{[^}]*--dsw-alias-label-primary:#f8f3e8;[^}]*background:rgba\(18,32,70,\.92\)/, 'maid dark peak cards keep their light-on-navy palette')
   assert.match(source, /data-dshw-chip-main/, 'themes get a stable selector instead of guessing aria roles')
 })
