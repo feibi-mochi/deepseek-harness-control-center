@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.4 - 2026-08-25
+
+- 修复 DSH Desktop 重启后部分插件设置因 WebView origin/localStorage 命名空间变化而丢失的问题：显示内容、输入框标签、仅显示余额、标签比例、提醒、峰谷卡和永久删除偏好现在会即时写入浏览器并同步备份到本地 `wallet.json`；宿主已有值优先恢复，宿主缺失的旧设置才从浏览器迁移，避免旧标签页在重启后反向覆盖新选择。 / Fixed wallet preferences disappearing after a DSH Desktop restart when the WebView origin/localStorage namespace changes: display, composer-label, primary-value, scale, reminder, peak-card, and permanent-delete preferences now write locally and mirror into `wallet.json`; existing host values restore authoritatively, while browser values migrate only for host-missing keys so stale tabs cannot undo newer choices after restart (Fixes #31).
+- 新增受白名单和长度限制的 `/api/wallet/preferences` 读写接口，拒绝未知键和敏感字段；偏好沿用账本的主备恢复、失败锁写和退出前刷新机制。 / Added an allowlisted, length-bounded `/api/wallet/preferences` endpoint that rejects unknown or sensitive fields and inherits the ledger's backup recovery, fail-closed writes, and shutdown flush behavior.
+- 新增宿主完整重载、Desktop 本地键丢失恢复、恶意字段拒绝和 keepalive 双写回归测试；当前 123/123 测试通过。 / Added host-reload persistence, missing-Desktop-key hydration, malicious-field rejection, and keepalive dual-write regressions; 123/123 tests pass.
+
 ## 0.3.3 - 2026-08-25
 
 - 新增通用官方套餐适配器契约，并首批接入 Z.ai Coding Plan 全球区与中国区；每个来源固定绑定官方域名和独立的 DSH 凭据引用，浏览器不会收到 Key、接口路径或原始响应。 / Added a generic official subscription-plan adapter contract with initial Z.ai Coding Plan Global and China adapters; each source is pinned to its official domain and its own DSH credential reference, while the browser receives no key, endpoint path, or raw response.

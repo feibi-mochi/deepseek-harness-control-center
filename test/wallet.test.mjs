@@ -27,6 +27,7 @@ import {
   ratesFor,
   costOf,
   normalizeStoreData,
+  normalizeUiPreferences,
   normalizeThreshold,
   sumBalances,
   normalizeAccountsData,
@@ -240,7 +241,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.3.3')
+  assert.equal(pkg.version, '0.3.4')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -608,13 +609,14 @@ test('official cost is accumulated at usage time and remains stable later', () =
   assert.equal(bucket.models['deepseek-v4-pro'].input, 2_000_000)
 
   const normalized = normalizeStoreData({
-    version: 4,
+    version: 5,
     thresholds: { CNY: 5 },
     accountThresholds: {},
     sessions: { current: { official: { ...bucket }, third: { models: {} } } },
     officialProviders: [],
     knownProviders: [],
     plans: {},
+    preferences: {},
   }, bj(2026, 8, 19, 22, 0))
   assert.ok(Math.abs(normalized.store.sessions.current.official.cost - 54.45) < 1e-12)
   assert.equal(normalized.migrated, false)
@@ -638,7 +640,7 @@ test('legacy stores migrate once and malformed counters are sanitized', () => {
   }
   const first = normalizeStoreData(legacy, bj(2026, 8, 17, 22, 0))
   assert.equal(first.migrated, true)
-  assert.equal(first.store.version, 4)
+  assert.equal(first.store.version, 5)
   assert.equal(first.store.thresholds.CNY, 7.25)
   assert.equal(first.store.sessions.old.official.cost, 18.15)
   assert.equal(first.store.sessions.old.official.models['deepseek-v4-pro'].cacheWrite, 0)
@@ -647,6 +649,25 @@ test('legacy stores migrate once and malformed counters are sanitized', () => {
   const second = normalizeStoreData(first.store, bj(2026, 8, 18, 10, 0))
   assert.equal(second.migrated, false)
   assert.equal(second.store.sessions.old.official.cost, 18.15)
+})
+
+test('durable UI preference backup accepts only bounded allowlisted string entries', () => {
+  const normalized = normalizeUiPreferences({
+    'dshw-chip-style-v1': 'hidden',
+    'dshw-peak-recharge-v1': 'false',
+    'dshw-chip-balance-only-v1': 'true',
+    '__proto__': 'bad',
+    'DEEPSEEK_API_KEY': 'must-not-store',
+    'dshw-peak-scale-v1': 1.2,
+    'dshw-data-visibility-v1': 'x'.repeat(501),
+  })
+  assert.deepEqual(normalized, {
+    'dshw-chip-style-v1': 'hidden',
+    'dshw-peak-recharge-v1': 'false',
+    'dshw-chip-balance-only-v1': 'true',
+  })
+  const store = normalizeStoreData({ preferences: normalized }).store
+  assert.deepEqual(store.preferences, normalized)
 })
 
 test('history day keys use Beijing calendar boundaries and malformed events are dropped', () => {
@@ -1197,6 +1218,48 @@ test('compatibility adapter centralizes desktop bridges and storage fallback', a
   assert.deepEqual(opened, ['https://platform.deepseek.com/top_up'])
   assert.equal(adapter.hasCapability('permanentDelete'), true)
   assert.equal(await adapter.requestNotificationPermission(), 'bridge')
+})
+
+test('missing Desktop localStorage preferences hydrate from the durable host backup', async () => {
+  const requests = []
+  const mockFetch = async (url, options) => {
+    requests.push({ url: String(url), options })
+    if (!options || options.method !== 'POST') {
+      return {
+        ok: true,
+        async json() {
+          return {
+            ok: true,
+            entries: {
+              'dshw-chip-style-v1': 'hidden',
+              'dshw-peak-recharge-v1': 'false',
+              'dshw-chip-balance-only-v1': 'true',
+            },
+          }
+        },
+      }
+    }
+    return { ok: true, async json() { return { ok: true } } }
+  }
+  const renderer = createHookRenderer()
+  const bundle = loadClientBundle(renderer.React, { fetch: mockFetch })
+  // Once the host has a durable value it wins over stale same-origin data;
+  // otherwise an old tab could undo a newer setting after Desktop restarts.
+  bundle.window.localStorage.setItem('dshw-chip-balance-only-v1', 'false')
+  const merged = await bundle.exports.__testing.hydratePersistentPreferences()
+  assert.equal(merged['dshw-chip-style-v1'], 'hidden')
+  assert.equal(merged['dshw-peak-recharge-v1'], 'false')
+  assert.equal(merged['dshw-chip-balance-only-v1'], 'true')
+  assert.equal(bundle.window.localStorage.getItem('dshw-chip-style-v1'), 'hidden')
+  assert.equal(bundle.window.localStorage.getItem('dshw-peak-recharge-v1'), 'false')
+  assert.equal(bundle.window.localStorage.getItem('dshw-chip-balance-only-v1'), 'true')
+  await bundle.exports.__testing.flushPersistentPreferences()
+  const posted = requests.filter((request) => request.options && request.options.method === 'POST')
+  assert.ok(posted.length > 0, 'hydration also migrates existing local values into the host backup')
+  const backed = Object.assign({}, ...posted.map((request) => JSON.parse(request.options.body).entries))
+  assert.equal(backed['dshw-chip-style-v1'], 'hidden')
+  assert.equal(backed['dshw-chip-balance-only-v1'], 'true')
+  assert.ok(posted.every((request) => request.options.keepalive === true))
 })
 
 test('desktop notification bridges may be fire-and-forget and expose native callbacks', async () => {
@@ -1923,6 +1986,46 @@ test('provider classification UI states that history is not retroactively repric
   assert.match(source, /仅影响勾选后的后续调用；已记录的历史用量不重新计价/)
   assert.match(readProjectFile('README.md'), /Existing history is not retroactively reclassified/)
   assert.match(readProjectFile('docs/i18n/README.zh-CN.md'), /既有历史不会追溯重分桶/)
+})
+test('UI preferences survive a host reload through the wallet store (Issue #31)', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-preferences-reload-'))
+  process.env.DSH_HOME = dir
+  try {
+    const first = await import('../index.js?preferences-reload-a-' + dir.replace(/[\\/]/g, '_'))
+    const firstHarness = installWalletRouteHarness(first, undefined)
+    let response = await firstHarness.call('/api/wallet/preferences', 'GET')
+    assert.deepEqual(response.json.entries, {})
+    response = await firstHarness.call('/api/wallet/preferences', 'POST', {
+      entries: {
+        'dshw-chip-style-v1': 'hidden',
+        'dshw-peak-recharge-v1': 'false',
+        'dshw-chip-balance-only-v1': 'true',
+      },
+    })
+    assert.equal(response.json.ok, true)
+    assert.equal(response.json.entries['dshw-chip-style-v1'], 'hidden')
+    const rejected = await firstHarness.call('/api/wallet/preferences', 'POST', {
+      entries: { DEEPSEEK_API_KEY: 'must-not-store' },
+    })
+    assert.equal(rejected.status, 400)
+    await new Promise((resolve) => setTimeout(resolve, 650))
+
+    const second = await import('../index.js?preferences-reload-b-' + dir.replace(/[\\/]/g, '_'))
+    const secondHarness = installWalletRouteHarness(second, undefined)
+    response = await secondHarness.call('/api/wallet/preferences', 'GET')
+    assert.deepEqual(response.json.entries, {
+      'dshw-chip-style-v1': 'hidden',
+      'dshw-peak-recharge-v1': 'false',
+      'dshw-chip-balance-only-v1': 'true',
+    })
+    const persisted = readFileSync(join(dir, 'storages', 'wallet.json'), 'utf8')
+    assert.doesNotMatch(persisted, /must-not-store|DEEPSEEK_API_KEY/)
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise((resolve) => setTimeout(resolve, 650))
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 test('provider aliases are billed after opt-in while plan providers stay isolated', async () => {
   const previousHome = process.env.DSH_HOME

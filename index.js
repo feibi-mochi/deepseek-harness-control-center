@@ -33,7 +33,7 @@ const OFFICIAL_PROVIDER = 'deepseek-official'
 // DeepSeek's official paid-API bucket by the wrapper-provider alias control.
 const PLAN_PROVIDER_IDS = new Set(PLAN_ADAPTERS.map((adapter) => adapter.provider))
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
-const PLUGIN_VERSION = '0.3.3'
+const PLUGIN_VERSION = '0.3.4'
 const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
 const PRICING_SYNC_INTERVAL_MS = 6 * 60 * 60_000
 const PRICING_SYNC_TIMEOUT_MS = 8_000
@@ -49,7 +49,7 @@ const ACCOUNTS_CRYPTO_VERSION = 1
 const CREDENTIAL_REF = 'DEEPSEEK_API_KEY'
 const DEFAULT_THRESHOLD = 5
 const BALANCE_REFRESH_MS = 60_000
-const STORE_VERSION = 4
+const STORE_VERSION = 5
 const HISTORY_VERSION = 1
 const HISTORY_RETENTION_DAYS = 365
 const HISTORY_MAX_EVENTS = 20_000
@@ -59,6 +59,22 @@ const PLAN_REFRESH_MS = 5 * 60_000
 const PLAN_STALE_MS = 15 * 60_000
 const PLAN_REFRESH_TIMEOUT_MS = 12_000
 const PLAN_RESPONSE_MAX_BYTES = 1_000_000
+const UI_PREFERENCE_KEYS = new Set([
+  'dshw-chip-style-v1',
+  'dshw-chip-balance-only-v1',
+  'dshw-data-visibility-v1',
+  'dshw-chip-scale-v1',
+  'dshw-completion-notify-v1',
+  'dshw-low-blink-v1',
+  'dshw-peakring-v1',
+  'dshw-peak-orient-v1',
+  'dshw-peak-recharge-v1',
+  'dshw-peak-scale-v1',
+  'dshw-peak-dock-v1',
+  'dshw-peaknotify-v1',
+  'dshw-permanent-delete-v1',
+])
+const UI_PREFERENCE_VALUE_MAX = 500
 
 // Beijing (UTC+8, no DST) weekday peak windows: 09:00-12:00 and 14:00-18:00.
 // From 2026-08-23 00:00 Beijing, Saturday and Sunday are off-peak all day.
@@ -886,6 +902,17 @@ export function isOfficialProvider(provider, extraProviders) {
   return Array.isArray(extraProviders) && extraProviders.includes(provider)
 }
 
+export function normalizeUiPreferences(value) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const normalized = {}
+  for (const [key, entry] of Object.entries(source)) {
+    if (!UI_PREFERENCE_KEYS.has(key)) continue
+    if (typeof entry !== 'string' || entry.length > UI_PREFERENCE_VALUE_MAX || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(entry)) continue
+    normalized[key] = entry
+  }
+  return normalized
+}
+
 function repairPlanProviderSessionUsage(sessions, historySource, atMs) {
   const rawEvents = historySource !== null && typeof historySource === 'object' && !Array.isArray(historySource)
     && historySource.events !== null && typeof historySource.events === 'object' && !Array.isArray(historySource.events)
@@ -949,6 +976,7 @@ export function normalizeStoreData(value, atMs = Date.now()) {
     officialProviders: normalizeProviderList(source.officialProviders),
     knownProviders: normalizeProviderList(source.knownProviders),
     plans: normalizePlanSnapshotCache(source.plans, atMs),
+    preferences: normalizeUiPreferences(source.preferences),
   }
   if (Object.hasOwn(source, 'history')) {
     normalized.history = normalizeHistory(source.history, atMs)
@@ -964,7 +992,7 @@ let usageStorageRecovered = false
 let usageStoreSkipBackupOnce = false
 
 function emptyStoreData() {
-  return { version: STORE_VERSION, thresholds: { CNY: DEFAULT_THRESHOLD }, accountThresholds: {}, sessions: {}, officialProviders: [], knownProviders: [], plans: {}, history: emptyHistory() }
+  return { version: STORE_VERSION, thresholds: { CNY: DEFAULT_THRESHOLD }, accountThresholds: {}, sessions: {}, officialProviders: [], knownProviders: [], plans: {}, preferences: {}, history: emptyHistory() }
 }
 
 function readStoreFile(path) {
@@ -2025,6 +2053,27 @@ export function apply(ctx, config) {
         return json(res, 200, { ok: true, pricing: pricingSnapshot() })
       },
     })
+    const disposePreferences = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/wallet/preferences',
+      handler: async (req, res) => {
+        if (req.method === 'GET') return json(res, 200, { ok: true, entries: { ...store.preferences } })
+        if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        if (usageStorageLocked) return json(res, 423, { ok: false, error: 'usage-storage-locked' })
+        const body = await readBody(req)
+        const entries = body && body.entries
+        if (entries === null || typeof entries !== 'object' || Array.isArray(entries)) {
+          return json(res, 400, { ok: false, error: 'entries object is required' })
+        }
+        const keys = Object.keys(entries)
+        if (keys.length > UI_PREFERENCE_KEYS.size) return json(res, 400, { ok: false, error: 'invalid-preferences' })
+        const patch = normalizeUiPreferences(entries)
+        if (Object.keys(patch).length !== keys.length) return json(res, 400, { ok: false, error: 'invalid-preferences' })
+        store.preferences = normalizeUiPreferences({ ...store.preferences, ...patch })
+        scheduleSave(ctx.logger)
+        return json(res, 200, { ok: true, entries: { ...store.preferences } })
+      },
+    })
     const disposeThreshold = ctx.webServer.register({
       kind: 'exact',
       path: '/api/wallet/threshold',
@@ -2226,6 +2275,7 @@ historyEventCount = store.history && store.history.events ? Object.keys(store.hi
       disposeSnapshot()
       disposeHealth()
       disposePricingRefresh()
+      disposePreferences()
       disposeThreshold()
       disposeRefresh()
       disposeClear()
