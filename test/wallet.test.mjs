@@ -2788,6 +2788,7 @@ test('peak ring footer supports vertical layout, hidden recharge, and floating m
   assert.doesNotMatch(source, /classList\.remove\('dshw_footRingNarrow'\)/, 'overflow measurement must not mutate the observed card and create ResizeObserver feedback')
   assert.match(source, /showRecharge, modelSelection && modelSelection\.provider, modelSelection && modelSelection\.model\]\)/, 'switching providers rebinds the observer to the newly mounted card')
   assert.match(source, /\.dshw_footRingNarrow \.dshw_footRingMoney\{display:flex;flex-wrap:wrap;[^}]*text-overflow:clip;white-space:normal\}/, 'narrow money values wrap instead of ellipsizing')
+  assert.match(source, /\.dshw_footRingNarrow \.dshw_footRingMoney\{[^}]*column-gap:3px;row-gap:0/, 'balance and session cost share one compact row whenever the two groups fit')
   assert.match(source, /\.dshw_footRingNarrow \.dshw_footRingCountdown\{[^}]*overflow:visible;text-overflow:clip;white-space:normal\}/, 'narrow countdown text remains complete')
   assert.match(source, /dshw_footRingMoneyGroup/, 'balance and session cost stay in unbroken value groups')
 })
