@@ -33,7 +33,7 @@ const OFFICIAL_PROVIDER = 'deepseek-official'
 // DeepSeek's official paid-API bucket by the wrapper-provider alias control.
 const PLAN_PROVIDER_IDS = new Set(PLAN_ADAPTERS.map((adapter) => adapter.provider))
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
-const PLUGIN_VERSION = '0.3.4'
+const PLUGIN_VERSION = '0.3.5'
 const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
 const PRICING_SYNC_INTERVAL_MS = 6 * 60 * 60_000
 const PRICING_SYNC_TIMEOUT_MS = 8_000

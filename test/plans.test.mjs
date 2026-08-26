@@ -76,6 +76,63 @@ test('Z.ai quota payload normalizes 5-hour tokens and monthly tool usage', () =>
   assert.throws(() => normalizePlanPayload(planAdapterById('zai-cn'), { success: true, data: { limits: [] } }, atMs), /invalid-plan-response/)
 })
 
+test('Z.ai China quota accepts the renamed CREDIT_LIMIT and credit-only responses', () => {
+  const atMs = Date.UTC(2026, 7, 26, 12)
+  const snapshot = normalizePlanPayload(planAdapterById('zai-cn'), {
+    code: 200,
+    success: true,
+    data: {
+      level: 'pro',
+      limits: [
+        { type: 'CREDIT_LIMIT', usage: 1000, currentValue: 370, remaining: 630, nextResetTime: atMs + 5 * 3_600_000 },
+      ],
+    },
+  }, atMs)
+
+  assert.deepEqual(snapshot.limits, [
+    { id: 'tokens-5h', kind: 'tokens', window: '5h', usedPercentage: 37, remainingPercentage: 63, used: 370, total: 1000, remaining: 630, resetAt: atMs + 5 * 3_600_000 },
+  ])
+})
+
+test('Z.ai quota keeps old token type support alongside CREDIT_LIMIT', () => {
+  const atMs = Date.UTC(2026, 7, 26, 12)
+  const snapshot = normalizePlanPayload(planAdapterById('zai-cn'), {
+    code: 200,
+    success: true,
+    data: {
+      limits: [
+        { type: 'CREDIT_LIMIT', percentage: 12 },
+        { type: 'TOKENS_LIMIT', percentage: 25 },
+        { type: 'TIME_LIMIT', usage: 100, currentValue: 10, remaining: 90, percentage: 10 },
+      ],
+    },
+  }, atMs)
+
+  assert.equal(snapshot.limits.length, 2)
+  assert.equal(snapshot.limits[0].id, 'tokens-5h')
+  assert.equal(snapshot.limits[0].usedPercentage, 12)
+  assert.equal(snapshot.limits[1].id, 'tools-month')
+})
+
+test('Z.ai quota prefers richer CREDIT_LIMIT data when old and new names coexist', () => {
+  const atMs = Date.UTC(2026, 7, 26, 12)
+  const snapshot = normalizePlanPayload(planAdapterById('zai-cn'), {
+    code: 200,
+    success: true,
+    data: {
+      limits: [
+        { type: 'TOKENS_LIMIT', percentage: 25 },
+        { type: 'CREDIT_LIMIT', usage: 1000, currentValue: 370, remaining: 630, nextResetTime: atMs + 5 * 3_600_000 },
+      ],
+    },
+  }, atMs)
+
+  assert.equal(snapshot.limits.length, 1)
+  assert.equal(snapshot.limits[0].used, 370)
+  assert.equal(snapshot.limits[0].total, 1000)
+  assert.equal(snapshot.limits[0].remaining, 630)
+})
+
 test('persisted plan snapshots are bounded and unknown adapters are discarded', () => {
   const atMs = Date.UTC(2026, 7, 23, 12)
   const cache = normalizePlanSnapshotCache({

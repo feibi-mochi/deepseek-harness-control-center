@@ -14,7 +14,7 @@
 
 > A local-first companion that keeps account status, per-conversation usage, completion reminders, official recharge, flexible layout, and host-gated session controls beside the DSH composer.
 
-> **Version:** v0.3.4 is the current stable release on GitHub and npm.
+> **Version:** v0.3.5 is the current stable release on GitHub and npm.
 
 > If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
 
@@ -73,13 +73,13 @@ Details: [compatibility](#browser-desktop-and-os-compatibility) · [data and tru
 
 ## Install
 
-From npm (stable v0.3.4):
+From npm (stable v0.3.5):
 
 ```sh
 dsh plugin --profile web add deepseek-harness-wallet
 ```
 
-or from GitHub `main` (current v0.3.4 source):
+or from GitHub `main` (current v0.3.5 source):
 
 ```sh
 dsh plugin --profile web add github:feibi-mochi/deepseek-harness-control-center

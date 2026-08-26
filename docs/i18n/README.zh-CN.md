@@ -14,7 +14,7 @@
 
 > 本地优先 DSH 助手：查看账户与本场用量、接收完成提醒、充值，并按宿主能力提供会话控制。
 
-> **版本：** GitHub 与 npm 当前稳定版均为 v0.3.4。
+> **版本：** GitHub 与 npm 当前稳定版均为 v0.3.5。
 
 > 如果 DeepSeek Harness Control Center 帮到了你，请考虑点一个 ⭐ Star，谢谢！
 
@@ -73,13 +73,13 @@ npm 插件负责监控与界面行为；需要宿主配合的能力，只有在 
 
 ## 安装
 
-从 npm 安装（当前稳定版 v0.3.4）：
+从 npm 安装（当前稳定版 v0.3.5）：
 
 ```sh
 dsh plugin --profile web add deepseek-harness-wallet
 ```
 
-或直接安装 GitHub `main`（当前 v0.3.4 源码版）：
+或直接安装 GitHub `main`（当前 v0.3.5 源码版）：
 
 ```sh
 dsh plugin --profile web add github:feibi-mochi/deepseek-harness-control-center

@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.5 - 2026-08-27
+
+- 修复 BigModel / Z.ai 中国区 Coding Plan 接口将 `TOKENS_LIMIT` 改名为 `CREDIT_LIMIT` 后被误判为“套餐接口返回格式已变化”的问题；兼容新旧字段，支持只有新额度字段的响应，并在接口提供时显示已用/总量、剩余量和重置时间。 / Fixed BigModel / Z.ai China Coding Plan responses being misclassified as “the plan response format changed” after `TOKENS_LIMIT` was renamed to `CREDIT_LIMIT`; both names are supported, credit-only responses are accepted, and available used/total, remaining, and reset values are shown when provided.
+- 增加新旧字段共存时优先保留信息更完整的额度数据，并补充接口归一化与回归测试；当前 126/126 测试通过。 / Prefer the richer quota record when old and new names coexist, with normalization and regression coverage; 126/126 tests pass.
+
 ## 0.3.4 - 2026-08-25
 
 - 修复 DSH Desktop 重启后部分插件设置因 WebView origin/localStorage 命名空间变化而丢失的问题：显示内容、输入框标签、仅显示余额、标签比例、提醒、峰谷卡和永久删除偏好现在会即时写入浏览器并同步备份到本地 `wallet.json`；宿主已有值优先恢复，宿主缺失的旧设置才从浏览器迁移，避免旧标签页在重启后反向覆盖新选择。 / Fixed wallet preferences disappearing after a DSH Desktop restart when the WebView origin/localStorage namespace changes: display, composer-label, primary-value, scale, reminder, peak-card, and permanent-delete preferences now write locally and mirror into `wallet.json`; existing host values restore authoritatively, while browser values migrate only for host-missing keys so stale tabs cannot undo newer choices after restart (Fixes #31).
