@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.6 - 2026-08-28
+
+- 峰谷时钟新增明确的「透明 / 实色」背景选择，不加入自动模式；透明模式常态不铺底，悬停时使用主题实色，实色模式保持原有卡片背景。 / Added an explicit peak-clock background choice between transparent and solid, without an automatic mode; transparent mode removes the normal fill and uses the themed solid hover surface, while solid mode keeps the existing card background.
+- 设置页和时钟控制面板共享该偏好，并同步保存到宿主钱包存储；覆盖默认、悬浮、竖排、浅色和深色主题，避免透明卡片文字或悬浮卡片背景异常。 / The setting is shared by the settings page and clock control panel and backed by the host wallet store; default, floating, vertical, light, and dark-theme paths are covered so transparent cards remain readable and floating cards keep a valid surface.
+
 ## 0.3.5 - 2026-08-27
 
 - 修复 BigModel / Z.ai 中国区 Coding Plan 接口将 `TOKENS_LIMIT` 改名为 `CREDIT_LIMIT` 后被误判为“套餐接口返回格式已变化”的问题；兼容新旧字段，支持只有新额度字段的响应，并在接口提供时显示已用/总量、剩余量和重置时间。 / Fixed BigModel / Z.ai China Coding Plan responses being misclassified as “the plan response format changed” after `TOKENS_LIMIT` was renamed to `CREDIT_LIMIT`; both names are supported, credit-only responses are accepted, and available used/total, remaining, and reset values are shown when provided.

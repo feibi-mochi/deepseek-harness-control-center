@@ -14,7 +14,7 @@
 
 > A local-first companion that keeps account status, per-conversation usage, completion reminders, official recharge, flexible layout, and host-gated session controls beside the DSH composer.
 
-> **Version:** v0.3.5 is the current stable release on GitHub and npm.
+> **Version:** v0.3.6 is the current local patch candidate; v0.3.5 remains the published stable release on GitHub and npm until release approval.
 
 > If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
 
@@ -34,7 +34,7 @@
 - **Third-party total** — current-session tokens (input / cache read / output). No balance guessing, no cost math, zero configuration.
 - **Provider classification** — observed wrapper routes appear in the settings page; opted-in routes join the official token/cost bucket for subsequent calls and are priced with the official table. Existing history is not retroactively reclassified.
 - **Click the chip** to open the detail panel: correctly formatted per-currency balances, cost and token splits, a freely editable low-balance threshold for the active account and currency (two decimals, persisted per account; alerts never mix currencies), manual refresh, and a jump to the official recharge page (first click shows the domain for confirmation — anti-phishing).
-- **Move, dock, and scale** — drag the chip freely, preview nearby snap targets, use compact horizontal or vertical layouts, adjust its scale from the control panel, and show official or third-party data independently. The choices are remembered locally.
+- **Move, dock, and scale** — drag the chip freely, preview nearby snap targets, use compact horizontal or vertical layouts, adjust its scale from the control panel, and show official or third-party data independently. The peak clock background can be explicitly set to transparent (solid on hover) or solid; there is no automatic mode. The choices are remembered locally.
 - **Composer-label controls and skin compatibility** — independently show/hide the composer label or reduce it to the primary remaining value (DeepSeek balance, Z.ai five-hour quota) without disabling reminders, settings, plan monitoring, or history. The standard chip also resists broad skin button rules and aligns with maid-atelier's 38px navy-and-gold composer toolbar.
 - **Floating window mode** — detach the detail panel into a draggable window with a remembered position, or minimize it directly to a freely movable dot; the dot turns red below the threshold.
 - **Completion reminders** — optionally notify when a conversation finishes, with persistent or timed modes, queueing and deduplication for simultaneous completions, cross-tab coordination, and an in-page fallback when system notifications are unavailable.
@@ -73,13 +73,13 @@ Details: [compatibility](#browser-desktop-and-os-compatibility) · [data and tru
 
 ## Install
 
-From npm (stable v0.3.5):
+From npm (published stable v0.3.5; v0.3.6 is the local patch candidate until release approval):
 
 ```sh
 dsh plugin --profile web add deepseek-harness-wallet
 ```
 
-or from GitHub `main` (current v0.3.5 source):
+or from GitHub `main` (published v0.3.5 source until release approval):
 
 ```sh
 dsh plugin --profile web add github:feibi-mochi/deepseek-harness-control-center

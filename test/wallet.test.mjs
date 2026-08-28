@@ -241,7 +241,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.3.5')
+  assert.equal(pkg.version, '0.3.6')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -655,6 +655,7 @@ test('durable UI preference backup accepts only bounded allowlisted string entri
   const normalized = normalizeUiPreferences({
     'dshw-chip-style-v1': 'hidden',
     'dshw-peak-recharge-v1': 'false',
+    'dshw-peak-background-v1': 'transparent',
     'dshw-chip-balance-only-v1': 'true',
     '__proto__': 'bad',
     'DEEPSEEK_API_KEY': 'must-not-store',
@@ -664,6 +665,7 @@ test('durable UI preference backup accepts only bounded allowlisted string entri
   assert.deepEqual(normalized, {
     'dshw-chip-style-v1': 'hidden',
     'dshw-peak-recharge-v1': 'false',
+    'dshw-peak-background-v1': 'transparent',
     'dshw-chip-balance-only-v1': 'true',
   })
   const store = normalizeStoreData({ preferences: normalized }).store
@@ -1233,6 +1235,7 @@ test('missing Desktop localStorage preferences hydrate from the durable host bac
             entries: {
               'dshw-chip-style-v1': 'hidden',
               'dshw-peak-recharge-v1': 'false',
+              'dshw-peak-background-v1': 'solid',
               'dshw-chip-balance-only-v1': 'true',
             },
           }
@@ -1249,9 +1252,11 @@ test('missing Desktop localStorage preferences hydrate from the durable host bac
   const merged = await bundle.exports.__testing.hydratePersistentPreferences()
   assert.equal(merged['dshw-chip-style-v1'], 'hidden')
   assert.equal(merged['dshw-peak-recharge-v1'], 'false')
+  assert.equal(merged['dshw-peak-background-v1'], 'solid')
   assert.equal(merged['dshw-chip-balance-only-v1'], 'true')
   assert.equal(bundle.window.localStorage.getItem('dshw-chip-style-v1'), 'hidden')
   assert.equal(bundle.window.localStorage.getItem('dshw-peak-recharge-v1'), 'false')
+  assert.equal(bundle.window.localStorage.getItem('dshw-peak-background-v1'), 'solid')
   assert.equal(bundle.window.localStorage.getItem('dshw-chip-balance-only-v1'), 'true')
   await bundle.exports.__testing.flushPersistentPreferences()
   const posted = requests.filter((request) => request.options && request.options.method === 'POST')
@@ -1259,6 +1264,7 @@ test('missing Desktop localStorage preferences hydrate from the durable host bac
   const backed = Object.assign({}, ...posted.map((request) => JSON.parse(request.options.body).entries))
   assert.equal(backed['dshw-chip-style-v1'], 'hidden')
   assert.equal(backed['dshw-chip-balance-only-v1'], 'true')
+  assert.equal(backed['dshw-peak-background-v1'], 'solid')
   assert.ok(posted.every((request) => request.options.keepalive === true))
 })
 
@@ -2819,11 +2825,12 @@ test('settings expose the ring switch and the switch-reminder toggle', () => {
 
 test('settings expose peak ring layout, scale slider (100-120%), recharge toggle and dock position', () => {
   const renderer = createHookRenderer()
-  const { exports } = loadClientBundle(renderer.React)
+  const { exports, window } = loadClientBundle(renderer.React)
   const tree = renderer.render(exports.__testing.WalletSettingsSection, { close: () => {} })
   const orientSelect = findElement(tree, (el) => el.props && el.props['aria-label'] === '峰谷时钟布局')
   const scaleInput = findElement(tree, (el) => el.props && el.props['aria-label'] === '峰谷时钟卡片比例')
   const rechargeToggle = findElement(tree, (el) => el.props && el.props['aria-label'] === '显示时钟充值按钮')
+  const backgroundSelect = findElement(tree, (el) => el.props && el.props['aria-label'] === '峰谷时钟背景')
   assert.ok(orientSelect, 'the layout orientation selector must render')
   assert.equal(orientSelect.props.value, 'horizontal', 'default orientation is horizontal')
   assert.ok(scaleInput, 'the peak clock scale slider must render')
@@ -2833,6 +2840,11 @@ test('settings expose peak ring layout, scale slider (100-120%), recharge toggle
   assert.equal(scaleInput.props.value, '100', 'default scale is 100%')
   assert.ok(rechargeToggle, 'the recharge toggle must render')
   assert.equal(rechargeToggle.props.checked, true, 'recharge button defaults to visible')
+  assert.ok(backgroundSelect, 'the background selector must render')
+  assert.equal(backgroundSelect.props.value, 'transparent', 'transparent background is the default')
+  assert.deepEqual(backgroundSelect.props.children.map((option) => option.props.value), ['transparent', 'solid'])
+  backgroundSelect.props.onChange({ target: { value: 'solid' } })
+  assert.equal(window.localStorage.getItem('dshw-peak-background-v1'), 'solid', 'background choice is persisted locally')
 })
 
 test('peak ring footer supports vertical layout, hidden recharge, and floating mode with reset', async () => {
@@ -2855,23 +2867,28 @@ test('peak ring footer supports vertical layout, hidden recharge, and floating m
   const { exports: e1, window: w1 } = loadClientBundle(r1.React, { fetch: mockFetch }, { setInterval: () => 0, clearInterval: () => {} })
   w1.localStorage.setItem('dshw-peak-orient-v1', 'vertical')
   w1.localStorage.setItem('dshw-peak-recharge-v1', 'true')
+  w1.localStorage.setItem('dshw-peak-background-v1', 'transparent')
   r1.render(e1.__testing.PeakRingFooter, { wide: true }, { flushEffects: true })
   await new Promise((resolve) => setTimeout(resolve, 30))
   let tree1 = r1.render(e1.__testing.PeakRingFooter, { wide: true })
   let row1 = findElement(tree1, (el) => el.props && String(el.props.className || '').includes('dshw_footRingVertical'))
   let horizBtn1 = findElement(tree1, (el) => el.props && String(el.props.className || '').includes('dshw_footRingBtnRechargeInline'))
   assert.ok(horizBtn1, 'vertical layout with recharge renders inline recharge button')
+  assert.equal(row1.props['data-dshw-peak-background'], 'transparent', 'transparent mode is reflected on the card')
 
   // 2. Vertical layout with hidden recharge
   const r2 = createHookRenderer()
   const { exports: e2, window: w2 } = loadClientBundle(r2.React, { fetch: mockFetch }, { setInterval: () => 0, clearInterval: () => {} })
   w2.localStorage.setItem('dshw-peak-orient-v1', 'vertical')
   w2.localStorage.setItem('dshw-peak-recharge-v1', 'false')
+  w2.localStorage.setItem('dshw-peak-background-v1', 'solid')
   r2.render(e2.__testing.PeakRingFooter, { wide: true }, { flushEffects: true })
   await new Promise((resolve) => setTimeout(resolve, 30))
   let tree2 = r2.render(e2.__testing.PeakRingFooter, { wide: true })
   let horizBtn2 = findElement(tree2, (el) => el.props && String(el.props.className || '').includes('dshw_footRingBtnRechargeInline'))
+  let row2 = findElement(tree2, (el) => el.props && String(el.props.className || '').includes('dshw_footRingVertical'))
   assert.equal(horizBtn2, null, 'turning off recharge removes the button')
+  assert.equal(row2.props['data-dshw-peak-background'], 'solid', 'solid mode is reflected on the card')
 
   // 3. Floating mode
   const r3 = createHookRenderer()
@@ -2894,6 +2911,8 @@ test('peak ring footer supports vertical layout, hidden recharge, and floating m
   assert.match(source, /\.dshw_footRingNarrow \.dshw_footRingMoney\{[^}]*column-gap:3px;row-gap:0/, 'balance and session cost share one compact row whenever the two groups fit')
   assert.match(source, /\.dshw_footRingNarrow \.dshw_footRingCountdown\{[^}]*overflow:visible;text-overflow:clip;white-space:normal\}/, 'narrow countdown text remains complete')
   assert.match(source, /dshw_footRingMoneyGroup/, 'balance and session cost stay in unbroken value groups')
+  assert.match(source, /data-dshw-peak-background="transparent"\]\:not\(\.dshw_footRingFloating\)/, 'transparent styling must not remove the solid surface from floating cards')
+  assert.match(source, /data-dshw-peak-background="transparent"\]\:not\(\.dshw_footRingFloating\):hover\{background:var\(--dsw-alias-bg-layer-1/, 'transparent mode restores the solid theme layer on hover')
 })
 
 test('dark mode theme compliance: client css avoids un-themed hardcoded white background fallbacks', () => {
@@ -2971,6 +2990,13 @@ test('clicking peak ring footer toggles dedicated control panel with full custom
   assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板时钟排版'), 'panel exposes orientation selector')
   assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板时钟卡片比例'), 'panel exposes scale slider')
   assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板时钟充值按钮'), 'panel exposes recharge toggle')
+  assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板时钟背景'), 'panel exposes background selector')
+  const backgroundSelect = findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板时钟背景')
+  assert.equal(backgroundSelect.props.value, 'transparent', 'the control panel defaults to transparent background')
+  backgroundSelect.props.onChange({ target: { value: 'solid' } })
+  tree = renderer.render(Ring, { wide: true })
+  const updatedCard = findElement(tree, (el) => el.props && String(el.props.className || '').includes('dshw_footRing'))
+  assert.equal(updatedCard.props['data-dshw-peak-background'], 'solid', 'control panel changes the rendered card background mode')
   assert.ok(findElement(panel, (el) => el.props && el.props['aria-label'] === '控制面板开启峰谷切换提醒'), 'panel exposes notification toggle')
 })
 
@@ -2985,7 +3011,7 @@ test('peak prefs writes suppress their own event echo', () => {
   const ringBody = source.slice(source.indexOf('function PeakRingFooter'), source.indexOf('function WalletChip'))
   const ringDispatches = ringBody.match(/compatibility\.dispatch\(PEAK_RING_EVENT\)/g) || []
   assert.equal(ringDispatches.length, 1, 'the ring event may only be dispatched from inside announcePrefs')
-  for (const fn of ['updateOrient', 'updateScale', 'updateRecharge', 'handleResetDock']) {
+  for (const fn of ['updateOrient', 'updateBackground', 'updateScale', 'updateRecharge', 'handleResetDock']) {
     const start = ringBody.indexOf('function ' + fn)
     assert.ok(start >= 0, fn + ' must exist')
     assert.match(ringBody.slice(start, start + 420), /announcePrefs\(/, fn + ' must announce through the guarded helper')
