@@ -26,6 +26,9 @@ import {
   pricingWindowSnapshot,
   ratesFor,
   costOf,
+  customCostOf,
+  normalizeCustomPriceRule,
+  normalizeCustomPrices,
   normalizeStoreData,
   normalizeUiPreferences,
   normalizeThreshold,
@@ -241,7 +244,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.3.6')
+  assert.equal(pkg.version, '0.3.8')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -609,12 +612,13 @@ test('official cost is accumulated at usage time and remains stable later', () =
   assert.equal(bucket.models['deepseek-v4-pro'].input, 2_000_000)
 
   const normalized = normalizeStoreData({
-    version: 5,
+    version: 6,
     thresholds: { CNY: 5 },
     accountThresholds: {},
-    sessions: { current: { official: { ...bucket }, third: { models: {} } } },
+    sessions: { current: { official: { ...bucket }, third: { models: {}, routes: {} } } },
     officialProviders: [],
     knownProviders: [],
+    customPrices: [],
     plans: {},
     preferences: {},
   }, bj(2026, 8, 19, 22, 0))
@@ -640,7 +644,7 @@ test('legacy stores migrate once and malformed counters are sanitized', () => {
   }
   const first = normalizeStoreData(legacy, bj(2026, 8, 17, 22, 0))
   assert.equal(first.migrated, true)
-  assert.equal(first.store.version, 5)
+  assert.equal(first.store.version, 6)
   assert.equal(first.store.thresholds.CNY, 7.25)
   assert.equal(first.store.sessions.old.official.cost, 18.15)
   assert.equal(first.store.sessions.old.official.models['deepseek-v4-pro'].cacheWrite, 0)
@@ -649,6 +653,33 @@ test('legacy stores migrate once and malformed counters are sanitized', () => {
   const second = normalizeStoreData(first.store, bj(2026, 8, 18, 10, 0))
   assert.equal(second.migrated, false)
   assert.equal(second.store.sessions.old.official.cost, 18.15)
+})
+
+test('custom third-party prices normalize exact routes and include cache write', () => {
+  const rule = normalizeCustomPriceRule({
+    provider: 'acme', model: 'model-x', currency: 'usd',
+    input: 1, cacheRead: 0.2, cacheWrite: 1.5, output: 4,
+  })
+  assert.deepEqual(rule, {
+    provider: 'acme', model: 'model-x', currency: 'USD',
+    input: 1, cacheRead: 0.2, cacheWrite: 1.5, output: 4,
+  })
+  assert.deepEqual(customCostOf('acme', 'model-x', {
+    inputTokens: 1_000_000,
+    cacheReadTokens: 500_000,
+    cacheWriteTokens: 200_000,
+    outputTokens: 250_000,
+  }, [rule]), { cost: 2.4, currency: 'USD', rule })
+  assert.equal(customCostOf('acme', 'other-model', { inputTokens: 1_000_000 }, [rule]), null)
+})
+
+test('custom price rules reject official and plan providers, bound inputs, and deduplicate last-wins', () => {
+  const valid = { provider: 'third', model: 'm', currency: 'CNY', input: 1, cacheRead: 0, cacheWrite: 0, output: 2 }
+  assert.equal(normalizeCustomPriceRule({ ...valid, provider: 'deepseek-official' }), null)
+  assert.equal(normalizeCustomPriceRule({ ...valid, provider: 'zai-coding-cn' }), null)
+  assert.equal(normalizeCustomPriceRule({ ...valid, output: -1 }), null)
+  assert.equal(normalizeCustomPriceRule({ ...valid, currency: 'coin' }), null)
+  assert.deepEqual(normalizeCustomPrices([valid, { ...valid, output: 3 }]), [{ ...valid, output: 3 }])
 })
 
 test('durable UI preference backup accepts only bounded allowlisted string entries', () => {
@@ -2086,6 +2117,50 @@ test('provider aliases are billed after opt-in while plan providers stay isolate
   }
 })
 
+test('custom third-party pricing route persists exact rates and reprices session and history views', async () => {
+  const previousHome = process.env.DSH_HOME
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-custom-price-'))
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?custom-price-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const harness = installWalletRouteHarness(mod, undefined)
+    const downstream = async function* () {
+      yield { type: 'usage', usage: {
+        inputTokens: 1_000_000, cacheReadTokens: 500_000,
+        cacheWriteTokens: 200_000, outputTokens: 250_000,
+      } }
+    }
+    for await (const _ of harness.usageTap(
+      { sessionId: 'session-custom-price', provider: 'acme', model: 'model-x', turn: 1, step: 1 },
+      () => downstream(),
+    )) {}
+
+    let response = await harness.call('/api/wallet/custom-prices', 'POST', { rule: {
+      provider: 'acme', model: 'model-x', currency: 'USD',
+      input: 1, cacheRead: 0.2, cacheWrite: 1.5, output: 4,
+    } })
+    assert.equal(response.status, 200)
+    assert.equal(response.json.rules.length, 1)
+    assert.deepEqual(response.json.knownRoutes, [{ provider: 'acme', model: 'model-x' }])
+
+    response = await harness.call('/api/wallet/snapshot', 'GET', undefined, '/api/wallet/snapshot?session=session-custom-price')
+    assert.deepEqual(response.json.session.third.customCosts, { USD: 2.4 })
+    assert.equal(response.json.session.third.routes[0].customCost.cost, 2.4)
+    response = await harness.call('/api/wallet/history', 'GET', undefined, '/api/wallet/history?days=365')
+    assert.deepEqual(response.json.summary.total.customCosts, { USD: 2.4 })
+
+    response = await harness.call('/api/wallet/custom-prices', 'DELETE', { provider: 'acme', model: 'model-x' })
+    assert.deepEqual(response.json.rules, [])
+    response = await harness.call('/api/wallet/snapshot', 'GET', undefined, '/api/wallet/snapshot?session=session-custom-price')
+    assert.deepEqual(response.json.session.third.customCosts, {})
+    assert.equal(response.json.session.third.tokens.input, 1_000_000, 'removing a price must retain usage')
+  } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 650))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('history route deduplicates stable usage identities and keeps history clearing separate', async () => {
   const previousHome = process.env.DSH_HOME
   const dir = mkdtempSync(join(tmpdir(), 'dshw-history-'))
@@ -3166,6 +3241,7 @@ test('composer wallet follows the selected provider instead of showing DeepSeek 
   assert.match(source, /lowNoticeRef\.current\.close\(\)/, 'leaving DeepSeek closes a stale low-balance notice')
 
   const pkg = JSON.parse(readProjectFile('package.json'))
+  assert.ok(!pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-runtime'), 'the removed rc.2 runtime package must not remain in the alpha.3 client graph')
   assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-model-selection'))
 })
 

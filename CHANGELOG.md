@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.8 - 2026-09-02
+
+- 新增第三方 API 自定义价格（Issue #36）：可按精确 Provider/模型设置币种以及每百万 Token 的输入、缓存读、缓存写和输出价格；本会话与 365 天账本会按当前规则重新估算，并始终标注为用户自定义估算。 / Added custom third-party API pricing (Issue #36) with exact Provider/model matching, currency, and per-million input/cache-read/cache-write/output rates; current-session and 365-day ledger totals are recalculated from the active user rule and always labeled as estimates.
+- 自定义价格保存在本机 `wallet.json`，支持修改、删除、观察到的路由建议、输入边界与官方/套餐 Provider 隔离；不会保存 API Key，也不会更改历史 Token。 / Custom prices persist locally in `wallet.json`, support editing, deletion, observed-route suggestions, bounded inputs, and strict separation from official/plan providers; no API keys or historical token counts are changed.
+
+## 0.3.7 - 2026-09-01
+
+- 适配 DeepSeek Harness `0.1.2-alpha.3` 的新客户端包结构：移除已被官方删除的 `@deepseek-ai/dsh-client-runtime` 清单边，继续通过 Cordis `sessions` 服务和现存 UI slot 合约工作；同时保留 `0.1.1-rc.2` 兼容。 / Adapted to the new DeepSeek Harness `0.1.2-alpha.3` client package layout by removing the retired `@deepseek-ai/dsh-client-runtime` manifest edge while continuing to consume the Cordis `sessions` service and surviving UI-slot contracts; `0.1.1-rc.2` compatibility is retained.
+- 在隔离的 alpha.3 构建和数据目录中完成 npm 安装、完整 Harness 构建、Web 启动、插件后端、设置页、365 天账本、背景选项和健康检查验证，未向测试环境写入真实凭据。 / Verified npm installation, a full Harness build, Web startup, plugin host routes, settings UI, 365-day ledger, background controls, and health checks in isolated alpha.3 source/data directories without copying real credentials into the test environment.
+
 ## 0.3.6 - 2026-08-28
 
 - 峰谷时钟新增明确的「透明 / 实色」背景选择，不加入自动模式；透明模式常态不铺底，悬停时使用主题实色，实色模式保持原有卡片背景。 / Added an explicit peak-clock background choice between transparent and solid, without an automatic mode; transparent mode removes the normal fill and uses the themed solid hover surface, while solid mode keeps the existing card background.

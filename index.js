@@ -33,7 +33,7 @@ const OFFICIAL_PROVIDER = 'deepseek-official'
 // DeepSeek's official paid-API bucket by the wrapper-provider alias control.
 const PLAN_PROVIDER_IDS = new Set(PLAN_ADAPTERS.map((adapter) => adapter.provider))
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
-const PLUGIN_VERSION = '0.3.6'
+const PLUGIN_VERSION = '0.3.8'
 const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
 const PRICING_SYNC_INTERVAL_MS = 6 * 60 * 60_000
 const PRICING_SYNC_TIMEOUT_MS = 8_000
@@ -49,10 +49,12 @@ const ACCOUNTS_CRYPTO_VERSION = 1
 const CREDENTIAL_REF = 'DEEPSEEK_API_KEY'
 const DEFAULT_THRESHOLD = 5
 const BALANCE_REFRESH_MS = 60_000
-const STORE_VERSION = 5
+const STORE_VERSION = 6
 const HISTORY_VERSION = 1
 const HISTORY_RETENTION_DAYS = 365
 const HISTORY_MAX_EVENTS = 20_000
+const CUSTOM_PRICE_MAX_RULES = 100
+const CUSTOM_PRICE_MAX_RATE = 1_000_000
 const HISTORY_TIMEZONE = 'Asia/Shanghai'
 const DAY_MS = 86_400_000
 const PLAN_REFRESH_MS = 5 * 60_000
@@ -733,6 +735,15 @@ function removeSessionContribution(event) {
       bucket.unpriced = Math.max(0, currentUnpriced - 1)
       bucket.priced = bucket.unpriced === 0
     }
+  } else if (bucket.routes && bucket.routes[event.provider] && bucket.routes[event.provider].models) {
+    const routeCounters = bucket.routes[event.provider].models[event.model]
+    if (routeCounters !== null && typeof routeCounters === 'object') {
+      subtractUsage(routeCounters, event.usage)
+      if (Object.values(routeCounters).every((value) => finiteCounter(value) === 0)) {
+        delete bucket.routes[event.provider].models[event.model]
+      }
+      if (Object.keys(bucket.routes[event.provider].models).length === 0) delete bucket.routes[event.provider]
+    }
   }
 }
 
@@ -812,17 +823,24 @@ function historyAggregate(events) {
   }
   total.cost = official.cost
   total.priced = official.priced
-  return {
-    official: publicHistoryAggregate(official, true),
-    third: publicHistoryAggregate(third, false),
-    total: publicHistoryAggregate(total, official.calls > 0),
-    cacheHitRate: cacheInput + cacheRead > 0 ? Math.round(cacheRead / (cacheInput + cacheRead) * 1000) / 10 : null,
-    models: [...models.values()].map((model) => ({
+  const publicModels = [...models.values()].map((model) => {
+    const aggregate = publicHistoryAggregate(model, model.official)
+    const priced = model.official ? null : customCostOf(model.provider, model.model, model.tokens, store.customPrices)
+    return {
       provider: model.provider,
       model: model.model,
       official: model.official,
-      ...publicHistoryAggregate(model, model.official),
-    })),
+      ...aggregate,
+      customCost: priced === null ? null : { cost: priced.cost, currency: priced.currency },
+    }
+  })
+  const customCosts = customCostTotals(publicModels)
+  return {
+    official: publicHistoryAggregate(official, true),
+    third: { ...publicHistoryAggregate(third, false), customCosts },
+    total: { ...publicHistoryAggregate(total, official.calls > 0), customCosts },
+    cacheHitRate: cacheInput + cacheRead > 0 ? Math.round(cacheRead / (cacheInput + cacheRead) * 1000) / 10 : null,
+    models: publicModels,
   }
 }
 
@@ -903,6 +921,90 @@ export function isOfficialProvider(provider, extraProviders) {
   return Array.isArray(extraProviders) && extraProviders.includes(provider)
 }
 
+function customPriceRate(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > CUSTOM_PRICE_MAX_RATE) return null
+  return Math.round(value * 1_000_000) / 1_000_000
+}
+
+/** Normalize one exact third-party provider/model price rule (rates are per 1M tokens). */
+export function normalizeCustomPriceRule(value) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const provider = boundedString(source.provider, 100)
+  const model = boundedString(source.model, 160)
+  const currency = typeof source.currency === 'string' ? source.currency.toUpperCase() : ''
+  const input = customPriceRate(source.input)
+  const cacheRead = customPriceRate(source.cacheRead)
+  const cacheWrite = customPriceRate(source.cacheWrite)
+  const output = customPriceRate(source.output)
+  if (provider === null || model === null || !/^[A-Z]{3}$/.test(currency)) return null
+  if (provider === OFFICIAL_PROVIDER || isPlanProvider(provider)) return null
+  if (provider === '__proto__' || provider === 'prototype' || provider === 'constructor') return null
+  if (model === '__proto__' || model === 'prototype' || model === 'constructor') return null
+  if ([input, cacheRead, cacheWrite, output].some((rate) => rate === null)) return null
+  return { provider, model, currency, input, cacheRead, cacheWrite, output }
+}
+
+/** Normalize, deduplicate, and bound persisted custom third-party price rules. */
+export function normalizeCustomPrices(value) {
+  if (!Array.isArray(value)) return []
+  const rules = new Map()
+  for (const candidate of value) {
+    const rule = normalizeCustomPriceRule(candidate)
+    if (rule === null) continue
+    const key = rule.provider + '\u0000' + rule.model
+    if (rules.has(key)) rules.delete(key)
+    rules.set(key, rule)
+    if (rules.size > CUSTOM_PRICE_MAX_RULES) rules.delete(rules.keys().next().value)
+  }
+  return [...rules.values()]
+}
+
+/** Price one exact third-party route from user-entered per-million-token rates. */
+export function customCostOf(provider, model, usage, rules) {
+  if (typeof provider !== 'string' || typeof model !== 'string') return null
+  const rule = normalizeCustomPrices(rules).find((entry) => entry.provider === provider && entry.model === model)
+  if (rule === undefined) return null
+  const counters = historyUsageCounters(usage)
+  const cost = (
+    counters.input * rule.input
+    + counters.cacheRead * rule.cacheRead
+    + counters.cacheWrite * rule.cacheWrite
+    + counters.output * rule.output
+  ) / 1e6
+  return { cost, currency: rule.currency, rule }
+}
+
+function normalizeThirdPartyRoutes(value) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const routes = {}
+  let providers = 0
+  let models = 0
+  for (const [provider, rawProvider] of Object.entries(source)) {
+    if (boundedString(provider, 100) === null || provider === OFFICIAL_PROVIDER || isPlanProvider(provider)) continue
+    if (provider === '__proto__' || provider === 'prototype' || provider === 'constructor') continue
+    const rawModels = rawProvider !== null && typeof rawProvider === 'object' && !Array.isArray(rawProvider)
+      ? rawProvider.models
+      : null
+    const normalizedModels = normalizeModels(rawModels)
+    if (Object.keys(normalizedModels).length === 0) continue
+    routes[provider] = { models: normalizedModels }
+    providers += 1
+    models += Object.keys(normalizedModels).length
+    if (providers >= 100 || models >= 1_000) break
+  }
+  return routes
+}
+
+function customCostTotals(rows) {
+  const totals = {}
+  for (const row of rows) {
+    if (row === null || typeof row !== 'object' || !row.customCost) continue
+    const currency = row.customCost.currency
+    totals[currency] = (totals[currency] || 0) + row.customCost.cost
+  }
+  return totals
+}
+
 export function normalizeUiPreferences(value) {
   const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
   const normalized = {}
@@ -964,7 +1066,10 @@ export function normalizeStoreData(value, atMs = Date.now()) {
     const rawSession = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
     sessions[sessionId] = {
       official: migratedOfficialBucket(rawSession.official, atMs),
-      third: { models: normalizeModels(rawSession.third && rawSession.third.models) },
+      third: {
+        models: normalizeModels(rawSession.third && rawSession.third.models),
+        routes: normalizeThirdPartyRoutes(rawSession.third && rawSession.third.routes),
+      },
     }
     sessionCount += 1
     if (sessionCount >= 5_000) break
@@ -976,6 +1081,7 @@ export function normalizeStoreData(value, atMs = Date.now()) {
     sessions,
     officialProviders: normalizeProviderList(source.officialProviders),
     knownProviders: normalizeProviderList(source.knownProviders),
+    customPrices: normalizeCustomPrices(source.customPrices),
     plans: normalizePlanSnapshotCache(source.plans, atMs),
     preferences: normalizeUiPreferences(source.preferences),
   }
@@ -993,7 +1099,7 @@ let usageStorageRecovered = false
 let usageStoreSkipBackupOnce = false
 
 function emptyStoreData() {
-  return { version: STORE_VERSION, thresholds: { CNY: DEFAULT_THRESHOLD }, accountThresholds: {}, sessions: {}, officialProviders: [], knownProviders: [], plans: {}, preferences: {}, history: emptyHistory() }
+  return { version: STORE_VERSION, thresholds: { CNY: DEFAULT_THRESHOLD }, accountThresholds: {}, sessions: {}, officialProviders: [], knownProviders: [], customPrices: [], plans: {}, preferences: {}, history: emptyHistory() }
 }
 
 function readStoreFile(path) {
@@ -1703,7 +1809,7 @@ function recordUsage(options, usage, atMs = Date.now()) {
     store.knownProviders = normalizeProviderList([...store.knownProviders, provider])
   }
   if (!Object.hasOwn(store.sessions, sessionId)) {
-    store.sessions[sessionId] = { official: emptyBucket(true), third: emptyBucket(false) }
+    store.sessions[sessionId] = { official: emptyBucket(true), third: { models: {}, routes: {} } }
   }
   const event = createHistoryEvent(request, usage, atMs, store.officialProviders)
   const previousEvent = event !== null && store.history && store.history.events ? store.history.events[event.eventId] : undefined
@@ -1716,6 +1822,10 @@ function recordUsage(options, usage, atMs = Date.now()) {
   else {
     if (!Object.hasOwn(bucket.models, model)) bucket.models[model] = emptyCounters()
     addUsage(bucket.models[model], usage)
+    if (bucket.routes === null || typeof bucket.routes !== 'object' || Array.isArray(bucket.routes)) bucket.routes = {}
+    if (!Object.hasOwn(bucket.routes, provider)) bucket.routes[provider] = { models: {} }
+    if (!Object.hasOwn(bucket.routes[provider].models, model)) bucket.routes[provider].models[model] = emptyCounters()
+    addUsage(bucket.routes[provider].models[model], usage)
   }
   recordHistoryEvent(event)
 }
@@ -1837,6 +1947,42 @@ function balanceTotal() {
   return sumBalances(balance.balances)
 }
 
+function thirdPartyRouteView(bucket) {
+  const routes = []
+  const source = normalizeThirdPartyRoutes(bucket && bucket.routes)
+  for (const [provider, providerState] of Object.entries(source)) {
+    if (isPlanProvider(provider) || isOfficialProvider(provider, store.officialProviders)) continue
+    for (const [model, counters] of Object.entries(providerState.models)) {
+      const priced = customCostOf(provider, model, counters, store.customPrices)
+      routes.push({
+        provider,
+        model,
+        tokens: counters,
+        totalTokens: historyTokenTotal(counters),
+        customCost: priced === null ? null : { cost: priced.cost, currency: priced.currency },
+      })
+    }
+  }
+  return routes
+}
+
+function knownThirdPartyRoutes() {
+  const found = new Map()
+  for (const session of Object.values(store.sessions)) {
+    for (const route of thirdPartyRouteView(session && session.third)) {
+      found.set(route.provider + '\u0000' + route.model, { provider: route.provider, model: route.model })
+    }
+  }
+  for (const event of Object.values(store.history && store.history.events ? store.history.events : {})) {
+    if (!event || event.official || isPlanProvider(event.provider) || isOfficialProvider(event.provider, store.officialProviders)) continue
+    const provider = boundedString(event.provider, 100)
+    const model = boundedString(event.model, 160)
+    if (provider !== null && model !== null) found.set(provider + '\u0000' + model, { provider, model })
+    if (found.size >= 500) break
+  }
+  return [...found.values()].slice(0, 500)
+}
+
 function sessionView(sessionId) {
   if (sessionId === undefined || sessionId === '') return { official: null, third: null }
   // Own-property lookup only: session ids like `__proto__`, `constructor` or
@@ -1853,6 +1999,7 @@ function sessionView(sessionId) {
   }
   const official = bucketTotals(session.official)
   const third = bucketTotals(session.third)
+  const thirdRoutes = thirdPartyRouteView(session.third)
   return {
     official: {
       tokens: official,
@@ -1860,7 +2007,12 @@ function sessionView(sessionId) {
       priced: session.official.priced === true,
       models: session.official.models,
     },
-    third: { tokens: third, models: session.third.models },
+    third: {
+      tokens: third,
+      models: session.third.models,
+      routes: thirdRoutes,
+      customCosts: customCostTotals(thirdRoutes),
+    },
   }
 }
 
@@ -1908,6 +2060,8 @@ function snapshotView(sessionId) {
       builtinOfficial: OFFICIAL_PROVIDER,
       official: [...store.officialProviders],
       known: store.knownProviders.filter((p) => p !== OFFICIAL_PROVIDER && !store.officialProviders.includes(p)),
+      customPrices: [...store.customPrices],
+      knownRoutes: knownThirdPartyRoutes(),
     },
     plans: planView(now),
   }
@@ -2191,12 +2345,47 @@ historyEventCount = store.history && store.history.events ? Object.keys(store.hi
         const body = await readBody(req)
         if (body === null || !Array.isArray(body.providers)) return json(res, 400, { ok: false, error: 'providers array is required' })
         store.officialProviders = normalizeProviderList(body.providers)
+        store.customPrices = store.customPrices.filter((rule) => !store.officialProviders.includes(rule.provider))
         scheduleSave(ctx.logger)
         return json(res, 200, {
           ok: true,
           official: [...store.officialProviders],
           known: store.knownProviders.filter((p) => p !== OFFICIAL_PROVIDER && !store.officialProviders.includes(p)),
         })
+      },
+    })
+    const disposeCustomPrices = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/wallet/custom-prices',
+      handler: async (req, res) => {
+        if (req.method === 'GET') {
+          return json(res, 200, { ok: true, rules: [...store.customPrices], knownRoutes: knownThirdPartyRoutes() })
+        }
+        if (usageStorageLocked) return json(res, 423, { ok: false, error: 'usage-storage-locked' })
+        if (req.method !== 'POST' && req.method !== 'DELETE') {
+          return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        }
+        const body = await readBody(req, 16_384)
+        if (body === null) return json(res, 400, { ok: false, error: 'invalid-body' })
+        if (req.method === 'POST') {
+          const rule = normalizeCustomPriceRule(body.rule)
+          if (rule === null) return json(res, 400, { ok: false, error: 'invalid-custom-price' })
+          if (isOfficialProvider(rule.provider, store.officialProviders)) {
+            return json(res, 400, { ok: false, error: 'official-provider-not-allowed' })
+          }
+          store.customPrices = normalizeCustomPrices([
+            ...store.customPrices.filter((entry) => entry.provider !== rule.provider || entry.model !== rule.model),
+            rule,
+          ])
+          scheduleSave(ctx.logger)
+          return json(res, 200, { ok: true, rules: [...store.customPrices], knownRoutes: knownThirdPartyRoutes() })
+        }
+        const provider = boundedString(body.provider, 100)
+        const model = boundedString(body.model, 160)
+        if (provider === null || model === null) return json(res, 400, { ok: false, error: 'provider-and-model-required' })
+        store.customPrices = store.customPrices.filter((entry) => entry.provider !== provider || entry.model !== model)
+        scheduleSave(ctx.logger)
+        return json(res, 200, { ok: true, rules: [...store.customPrices], knownRoutes: knownThirdPartyRoutes() })
       },
     })
     const disposeAccounts = ctx.webServer.register({
@@ -2285,6 +2474,7 @@ historyEventCount = store.history && store.history.events ? Object.keys(store.hi
       disposePlans()
       disposeAccounts()
       disposeProviders()
+      disposeCustomPrices()
       disposeActivate()
       disposeRemove()
       clearInterval(balanceTimer)
