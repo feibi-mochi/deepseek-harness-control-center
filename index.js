@@ -28,12 +28,13 @@ export const name = 'wallet'
 export const inject = ['webServer', 'credentials']
 
 const OFFICIAL_PROVIDER = 'deepseek-official'
+const TRANSPARENT_PROVIDER_PREFIX = 'vision-toolkit-'
 // Subscription-plan routes are independent providers. They may contribute to
 // the generic third-party token ledger, but they must never be promoted into
 // DeepSeek's official paid-API bucket by the wrapper-provider alias control.
 const PLAN_PROVIDER_IDS = new Set(PLAN_ADAPTERS.map((adapter) => adapter.provider))
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
-const PLUGIN_VERSION = '0.3.8'
+const PLUGIN_VERSION = '0.3.9'
 const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
 const PRICING_SYNC_INTERVAL_MS = 6 * 60 * 60_000
 const PRICING_SYNC_TIMEOUT_MS = 8_000
@@ -49,14 +50,21 @@ const ACCOUNTS_CRYPTO_VERSION = 1
 const CREDENTIAL_REF = 'DEEPSEEK_API_KEY'
 const DEFAULT_THRESHOLD = 5
 const BALANCE_REFRESH_MS = 60_000
-const STORE_VERSION = 6
+const STORE_VERSION = 7
 const HISTORY_VERSION = 1
 const HISTORY_RETENTION_DAYS = 365
 const HISTORY_MAX_EVENTS = 20_000
 const CUSTOM_PRICE_MAX_RULES = 100
 const CUSTOM_PRICE_MAX_RATE = 1_000_000
+const CUSTOM_PRICE_MAX_WINDOWS = 24
 const HISTORY_TIMEZONE = 'Asia/Shanghai'
 const DAY_MS = 86_400_000
+const MINUTES_PER_DAY = 1_440
+const MINUTES_PER_WEEK = 10_080
+const CUSTOM_WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0]
+const WEEKDAY_NUMBER = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
+const customTimeFormatters = new Map()
+const customTimezoneNames = new Map()
 const PLAN_REFRESH_MS = 5 * 60_000
 const PLAN_STALE_MS = 15 * 60_000
 const PLAN_REFRESH_TIMEOUT_MS = 12_000
@@ -797,7 +805,8 @@ function publicHistoryAggregate(aggregate, hasOfficial = true) {
   }
 }
 
-function historyAggregate(events) {
+function historyAggregate(events, customRules = null) {
+  const ruleMap = customRules || customPriceRuleMap(store.customPrices)
   const official = emptyHistoryAggregate()
   const third = emptyHistoryAggregate()
   const models = new Map()
@@ -811,10 +820,18 @@ function historyAggregate(events) {
     const key = event.provider + '\u0000' + event.model
     let model = models.get(key)
     if (model === undefined) {
-      model = { provider: event.provider, model: event.model, official: event.official, ...emptyHistoryAggregate() }
+      model = { provider: event.provider, model: event.model, official: event.official, customCost: null, ...emptyHistoryAggregate() }
       models.set(key, model)
     }
     addHistoryAggregate(model, event)
+    if (!event.official) {
+      const rule = ruleMap.get(event.provider + '\u0000' + event.model)
+      const priced = rule === undefined ? null : customCostWithRule(rule, event.usage, event.occurredAt)
+      if (priced !== null) {
+        if (model.customCost === null) model.customCost = { cost: 0, currency: priced.currency }
+        model.customCost.cost += priced.cost
+      }
+    }
   }
   const total = emptyHistoryAggregate()
   for (const source of [official, third]) {
@@ -825,13 +842,12 @@ function historyAggregate(events) {
   total.priced = official.priced
   const publicModels = [...models.values()].map((model) => {
     const aggregate = publicHistoryAggregate(model, model.official)
-    const priced = model.official ? null : customCostOf(model.provider, model.model, model.tokens, store.customPrices)
     return {
       provider: model.provider,
       model: model.model,
       official: model.official,
       ...aggregate,
-      customCost: priced === null ? null : { cost: priced.cost, currency: priced.currency },
+      customCost: model.official || model.customCost === null ? null : { ...model.customCost },
     }
   })
   const customCosts = customCostTotals(publicModels)
@@ -848,6 +864,7 @@ export function historyView({ days = HISTORY_RETENTION_DAYS, date = null, sessio
   const window = historyWindow(atMs, days)
   const sourceEvents = store.history && store.history.events ? Object.values(store.history.events) : []
   const filtered = sourceEvents.filter((event) => event.day >= window.from && event.day <= window.to && (sessionId === null || event.sessionId === sessionId))
+  const customRules = customPriceRuleMap(store.customPrices)
   const byDay = new Map()
   for (const event of filtered) {
     if (!byDay.has(event.day)) byDay.set(event.day, [])
@@ -857,7 +874,7 @@ export function historyView({ days = HISTORY_RETENTION_DAYS, date = null, sessio
   for (let index = 0; index < window.days; index += 1) {
     const day = shiftHistoryDay(window.from, index)
     const events = byDay.get(day) || []
-    const aggregate = historyAggregate(events)
+    const aggregate = historyAggregate(events, customRules)
     const dayStart = historyDayStartMs(day)
     daysOut.push({
       date: day,
@@ -868,12 +885,12 @@ export function historyView({ days = HISTORY_RETENTION_DAYS, date = null, sessio
       cacheHitRate: aggregate.cacheHitRate,
     })
   }
-  const total = historyAggregate(filtered)
+  const total = historyAggregate(filtered, customRules)
   const todayEvents = byDay.get(window.to) || []
   const monthPrefix = window.to.slice(0, 7)
   const monthEvents = filtered.filter((event) => event.day.startsWith(monthPrefix))
   const selectedEvents = typeof date === 'string' ? (byDay.get(date) || []) : []
-  const selectedAggregate = typeof date === 'string' && date >= window.from && date <= window.to ? historyAggregate(selectedEvents) : null
+  const selectedAggregate = typeof date === 'string' && date >= window.from && date <= window.to ? historyAggregate(selectedEvents, customRules) : null
   return {
     ok: true,
     timezone: HISTORY_TIMEZONE,
@@ -882,8 +899,8 @@ export function historyView({ days = HISTORY_RETENTION_DAYS, date = null, sessio
     window,
     summary: {
       total: total.total,
-      today: historyAggregate(todayEvents).total,
-      month: historyAggregate(monthEvents).total,
+      today: historyAggregate(todayEvents, customRules).total,
+      month: historyAggregate(monthEvents, customRules).total,
       cacheHitRate: total.cacheHitRate,
     },
     days: daysOut,
@@ -912,7 +929,9 @@ export function normalizeProviderList(value) {
 }
 
 export function isPlanProvider(provider) {
-  return typeof provider === 'string' && PLAN_PROVIDER_IDS.has(provider)
+  if (typeof provider !== 'string') return false
+  const upstream = provider.startsWith(TRANSPARENT_PROVIDER_PREFIX) ? provider.slice(TRANSPARENT_PROVIDER_PREFIX.length) : provider
+  return PLAN_PROVIDER_IDS.has(upstream)
 }
 
 export function isOfficialProvider(provider, extraProviders) {
@@ -924,6 +943,107 @@ export function isOfficialProvider(provider, extraProviders) {
 function customPriceRate(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > CUSTOM_PRICE_MAX_RATE) return null
   return Math.round(value * 1_000_000) / 1_000_000
+}
+
+function normalizeCustomTimezone(value) {
+  if (typeof value !== 'string' || value === '' || value.length > 80 || /[\u0000-\u001f\u007f]/.test(value)) return null
+  if (customTimezoneNames.has(value)) return customTimezoneNames.get(value)
+  try {
+    const timezone = new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions().timeZone
+    if (customTimezoneNames.size >= 200) customTimezoneNames.clear()
+    customTimezoneNames.set(value, timezone)
+    return timezone
+  } catch {
+    return null
+  }
+}
+
+function customTimeMinute(value) {
+  if (typeof value !== 'string') return null
+  const match = value.match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+  return match === null ? null : Number(match[1]) * 60 + Number(match[2])
+}
+
+function normalizeCustomPriceWindow(value) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const label = boundedString(source.label, 40)
+  const start = customTimeMinute(source.start)
+  const end = customTimeMinute(source.end)
+  const rawDays = Array.isArray(source.days) ? source.days : []
+  const days = CUSTOM_WEEKDAY_ORDER.filter((day) => rawDays.includes(day))
+  const input = customPriceRate(source.input)
+  const cacheRead = customPriceRate(source.cacheRead)
+  const cacheWrite = customPriceRate(source.cacheWrite)
+  const output = customPriceRate(source.output)
+  if (label === null || start === null || end === null || start === end || days.length === 0) return null
+  if (rawDays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) return null
+  if ([input, cacheRead, cacheWrite, output].some((rate) => rate === null)) return null
+  return { label, days, start: source.start, end: source.end, input, cacheRead, cacheWrite, output }
+}
+
+function normalizeCustomPriceWindows(value) {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > CUSTOM_PRICE_MAX_WINDOWS) return null
+  const windows = []
+  const intervals = []
+  for (const candidate of value) {
+    const window = normalizeCustomPriceWindow(candidate)
+    if (window === null) return null
+    const startMinute = customTimeMinute(window.start)
+    const endMinute = customTimeMinute(window.end)
+    const duration = (endMinute - startMinute + MINUTES_PER_DAY) % MINUTES_PER_DAY
+    for (const day of window.days) {
+      const start = day * MINUTES_PER_DAY + startMinute
+      const end = start + duration
+      if (end <= MINUTES_PER_WEEK) intervals.push({ start, end })
+      else {
+        intervals.push({ start, end: MINUTES_PER_WEEK })
+        intervals.push({ start: 0, end: end - MINUTES_PER_WEEK })
+      }
+    }
+    windows.push(window)
+  }
+  intervals.sort((left, right) => left.start - right.start || left.end - right.end)
+  for (let index = 1; index < intervals.length; index += 1) {
+    if (intervals[index].start < intervals[index - 1].end) return null
+  }
+  return windows
+}
+
+function customWallTime(atMs, timezone) {
+  if (!Number.isFinite(atMs)) return null
+  try {
+    let formatter = customTimeFormatters.get(timezone)
+    if (formatter === undefined) {
+      formatter = new Intl.DateTimeFormat('en-US-u-ca-gregory', {
+        timeZone: timezone,
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      })
+      if (customTimeFormatters.size >= 200) customTimeFormatters.clear()
+      customTimeFormatters.set(timezone, formatter)
+    }
+    const parts = Object.fromEntries(formatter.formatToParts(new Date(atMs)).map((part) => [part.type, part.value]))
+    const weekday = WEEKDAY_NUMBER[parts.weekday]
+    const hour = Number(parts.hour)
+    const minute = Number(parts.minute)
+    return Number.isInteger(weekday) && Number.isInteger(hour) && Number.isInteger(minute)
+      ? { weekday, minute: hour * 60 + minute }
+      : null
+  } catch {
+    return null
+  }
+}
+
+function customWindowMatches(window, wall) {
+  const start = customTimeMinute(window.start)
+  const end = customTimeMinute(window.end)
+  if (start < end) return window.days.includes(wall.weekday) && wall.minute >= start && wall.minute < end
+  if (wall.minute >= start) return window.days.includes(wall.weekday)
+  const previousDay = (wall.weekday + 6) % 7
+  return wall.minute < end && window.days.includes(previousDay)
 }
 
 /** Normalize one exact third-party provider/model price rule (rates are per 1M tokens). */
@@ -941,7 +1061,12 @@ export function normalizeCustomPriceRule(value) {
   if (provider === '__proto__' || provider === 'prototype' || provider === 'constructor') return null
   if (model === '__proto__' || model === 'prototype' || model === 'constructor') return null
   if ([input, cacheRead, cacheWrite, output].some((rate) => rate === null)) return null
-  return { provider, model, currency, input, cacheRead, cacheWrite, output }
+  const windows = normalizeCustomPriceWindows(source.windows)
+  if (windows === null) return null
+  const timezone = normalizeCustomTimezone(source.timezone === undefined ? HISTORY_TIMEZONE : source.timezone)
+  if (timezone === null) return null
+  const rule = { provider, model, currency, input, cacheRead, cacheWrite, output }
+  return windows.length === 0 ? rule : { ...rule, timezone, windows }
 }
 
 /** Normalize, deduplicate, and bound persisted custom third-party price rules. */
@@ -959,19 +1084,105 @@ export function normalizeCustomPrices(value) {
   return [...rules.values()]
 }
 
-/** Price one exact third-party route from user-entered per-million-token rates. */
-export function customCostOf(provider, model, usage, rules) {
-  if (typeof provider !== 'string' || typeof model !== 'string') return null
-  const rule = normalizeCustomPrices(rules).find((entry) => entry.provider === provider && entry.model === model)
-  if (rule === undefined) return null
+function customPriceRuleMap(rules) {
+  return new Map(normalizeCustomPrices(rules).map((rule) => [rule.provider + '\u0000' + rule.model, rule]))
+}
+
+function customRuleFor(provider, model, rules) {
+  if (typeof provider !== 'string' || typeof model !== 'string' || !Array.isArray(rules)) return null
+  for (let index = rules.length - 1; index >= 0; index -= 1) {
+    const candidate = rules[index]
+    if (candidate && candidate.provider === provider && candidate.model === model) return normalizeCustomPriceRule(candidate)
+  }
+  return null
+}
+
+function customRateSelection(rule, atMs) {
+  if (Array.isArray(rule.windows) && rule.windows.length > 0 && Number.isFinite(atMs)) {
+    const wall = customWallTime(atMs, rule.timezone)
+    const window = wall === null ? null : rule.windows.find((candidate) => customWindowMatches(candidate, wall))
+    if (window !== undefined && window !== null) {
+      return {
+        kind: 'window',
+        label: window.label,
+        rates: { input: window.input, cacheRead: window.cacheRead, cacheWrite: window.cacheWrite, output: window.output },
+        window,
+      }
+    }
+  }
+  return {
+    kind: 'base',
+    label: '基础价',
+    rates: { input: rule.input, cacheRead: rule.cacheRead, cacheWrite: rule.cacheWrite, output: rule.output },
+    window: null,
+  }
+}
+
+export function customPriceStatus(value, atMs = Date.now()) {
+  const rule = normalizeCustomPriceRule(value)
+  if (rule === null) return null
+  const selected = customRateSelection(rule, atMs)
+  return {
+    kind: selected.kind,
+    label: selected.label,
+    timezone: rule.timezone || null,
+    rates: selected.rates,
+    window: selected.window === null
+      ? null
+      : { label: selected.window.label, days: [...selected.window.days], start: selected.window.start, end: selected.window.end },
+  }
+}
+
+function customCostWithRule(rule, usage, atMs) {
+  const selected = customRateSelection(rule, atMs)
   const counters = historyUsageCounters(usage)
   const cost = (
-    counters.input * rule.input
-    + counters.cacheRead * rule.cacheRead
-    + counters.cacheWrite * rule.cacheWrite
-    + counters.output * rule.output
+    counters.input * selected.rates.input
+    + counters.cacheRead * selected.rates.cacheRead
+    + counters.cacheWrite * selected.rates.cacheWrite
+    + counters.output * selected.rates.output
   ) / 1e6
-  return { cost, currency: rule.currency, rule }
+  const result = { cost, currency: rule.currency, rule }
+  if (Array.isArray(rule.windows) && rule.windows.length > 0) result.active = customPriceStatus(rule, atMs)
+  return result
+}
+
+/** Price one exact third-party route from user-entered per-million-token rates. */
+export function customCostOf(provider, model, usage, rules, atMs = null) {
+  const rule = customRuleFor(provider, model, rules)
+  return rule === null ? null : customCostWithRule(rule, usage, atMs)
+}
+
+function customSessionCost(provider, model, usage, sessionId, rules) {
+  const rule = customRuleFor(provider, model, rules)
+  if (rule === null) return null
+  const remaining = historyUsageCounters(usage)
+  let cost = 0
+  if (typeof sessionId === 'string') {
+    const events = Object.values(store.history && store.history.events ? store.history.events : {})
+      .filter((event) => event && !event.official && event.sessionId === sessionId && event.provider === provider && event.model === model)
+      .sort((left, right) => right.occurredAt - left.occurredAt)
+    for (const event of events) {
+      const counters = historyUsageCounters(event.usage)
+      // Clearing a session intentionally leaves historical events in the
+      // ledger. Walk newest-first and only price events that still fit inside
+      // the live aggregate, so pre-clear usage is not resurrected here.
+      if (!['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'].every((key) => counters[key] <= remaining[key])) continue
+      for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning']) remaining[key] -= counters[key]
+      cost += customCostWithRule(rule, event.usage, event.occurredAt).cost
+    }
+  }
+  // Session totals can outlive the 365-day event ledger or survive an explicit
+  // history clear. Without an occurrence timestamp, charge only the configured
+  // base rate instead of pretending the current time window applied.
+  cost += customCostWithRule(rule, remaining, null).cost
+  const result = { cost, currency: rule.currency, rule }
+  if (Array.isArray(rule.windows) && rule.windows.length > 0) result.active = customPriceStatus(rule, Date.now())
+  return result
+}
+
+function customPriceRulesView(atMs = Date.now()) {
+  return store.customPrices.map((rule) => ({ ...rule, active: customPriceStatus(rule, atMs) }))
 }
 
 function normalizeThirdPartyRoutes(value) {
@@ -1947,19 +2158,22 @@ function balanceTotal() {
   return sumBalances(balance.balances)
 }
 
-function thirdPartyRouteView(bucket) {
+function thirdPartyRouteView(bucket, sessionId = null) {
   const routes = []
   const source = normalizeThirdPartyRoutes(bucket && bucket.routes)
   for (const [provider, providerState] of Object.entries(source)) {
     if (isPlanProvider(provider) || isOfficialProvider(provider, store.officialProviders)) continue
     for (const [model, counters] of Object.entries(providerState.models)) {
-      const priced = customCostOf(provider, model, counters, store.customPrices)
+      const priced = sessionId === null
+        ? customCostOf(provider, model, counters, store.customPrices)
+        : customSessionCost(provider, model, counters, sessionId, store.customPrices)
       routes.push({
         provider,
         model,
         tokens: counters,
         totalTokens: historyTokenTotal(counters),
         customCost: priced === null ? null : { cost: priced.cost, currency: priced.currency },
+        activePrice: priced && priced.active ? priced.active : null,
       })
     }
   }
@@ -1999,7 +2213,7 @@ function sessionView(sessionId) {
   }
   const official = bucketTotals(session.official)
   const third = bucketTotals(session.third)
-  const thirdRoutes = thirdPartyRouteView(session.third)
+  const thirdRoutes = thirdPartyRouteView(session.third, sessionId)
   return {
     official: {
       tokens: official,
@@ -2060,7 +2274,7 @@ function snapshotView(sessionId) {
       builtinOfficial: OFFICIAL_PROVIDER,
       official: [...store.officialProviders],
       known: store.knownProviders.filter((p) => p !== OFFICIAL_PROVIDER && !store.officialProviders.includes(p)),
-      customPrices: [...store.customPrices],
+      customPrices: customPriceRulesView(now),
       knownRoutes: knownThirdPartyRoutes(),
     },
     plans: planView(now),
@@ -2359,7 +2573,7 @@ historyEventCount = store.history && store.history.events ? Object.keys(store.hi
       path: '/api/wallet/custom-prices',
       handler: async (req, res) => {
         if (req.method === 'GET') {
-          return json(res, 200, { ok: true, rules: [...store.customPrices], knownRoutes: knownThirdPartyRoutes() })
+          return json(res, 200, { ok: true, rules: customPriceRulesView(), knownRoutes: knownThirdPartyRoutes() })
         }
         if (usageStorageLocked) return json(res, 423, { ok: false, error: 'usage-storage-locked' })
         if (req.method !== 'POST' && req.method !== 'DELETE') {
@@ -2378,14 +2592,14 @@ historyEventCount = store.history && store.history.events ? Object.keys(store.hi
             rule,
           ])
           scheduleSave(ctx.logger)
-          return json(res, 200, { ok: true, rules: [...store.customPrices], knownRoutes: knownThirdPartyRoutes() })
+          return json(res, 200, { ok: true, rules: customPriceRulesView(), knownRoutes: knownThirdPartyRoutes() })
         }
         const provider = boundedString(body.provider, 100)
         const model = boundedString(body.model, 160)
         if (provider === null || model === null) return json(res, 400, { ok: false, error: 'provider-and-model-required' })
         store.customPrices = store.customPrices.filter((entry) => entry.provider !== provider || entry.model !== model)
         scheduleSave(ctx.logger)
-        return json(res, 200, { ok: true, rules: [...store.customPrices], knownRoutes: knownThirdPartyRoutes() })
+        return json(res, 200, { ok: true, rules: customPriceRulesView(), knownRoutes: knownThirdPartyRoutes() })
       },
     })
     const disposeAccounts = ctx.webServer.register({

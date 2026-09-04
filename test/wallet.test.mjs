@@ -27,6 +27,7 @@ import {
   ratesFor,
   costOf,
   customCostOf,
+  customPriceStatus,
   normalizeCustomPriceRule,
   normalizeCustomPrices,
   normalizeStoreData,
@@ -244,7 +245,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.3.8')
+  assert.equal(pkg.version, '0.3.9')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -612,7 +613,7 @@ test('official cost is accumulated at usage time and remains stable later', () =
   assert.equal(bucket.models['deepseek-v4-pro'].input, 2_000_000)
 
   const normalized = normalizeStoreData({
-    version: 6,
+    version: 7,
     thresholds: { CNY: 5 },
     accountThresholds: {},
     sessions: { current: { official: { ...bucket }, third: { models: {}, routes: {} } } },
@@ -644,7 +645,7 @@ test('legacy stores migrate once and malformed counters are sanitized', () => {
   }
   const first = normalizeStoreData(legacy, bj(2026, 8, 17, 22, 0))
   assert.equal(first.migrated, true)
-  assert.equal(first.store.version, 6)
+  assert.equal(first.store.version, 7)
   assert.equal(first.store.thresholds.CNY, 7.25)
   assert.equal(first.store.sessions.old.official.cost, 18.15)
   assert.equal(first.store.sessions.old.official.models['deepseek-v4-pro'].cacheWrite, 0)
@@ -680,6 +681,78 @@ test('custom price rules reject official and plan providers, bound inputs, and d
   assert.equal(normalizeCustomPriceRule({ ...valid, output: -1 }), null)
   assert.equal(normalizeCustomPriceRule({ ...valid, currency: 'coin' }), null)
   assert.deepEqual(normalizeCustomPrices([valid, { ...valid, output: 3 }]), [{ ...valid, output: 3 }])
+})
+
+test('custom third-party time windows select weekday, cross-midnight, and DST-aware rates', () => {
+  const base = {
+    provider: 'acme', model: 'model-x', currency: 'USD',
+    input: 10, cacheRead: 2, cacheWrite: 4, output: 20,
+  }
+  const weekday = normalizeCustomPriceRule({
+    ...base,
+    timezone: 'Asia/Shanghai',
+    windows: [{
+      label: '工作日低谷', days: [1, 2, 3, 4, 5], start: '09:00', end: '12:00',
+      input: 2, cacheRead: 0.5, cacheWrite: 1, output: 4,
+    }],
+  })
+  assert.ok(weekday)
+  const peakCost = customCostOf('acme', 'model-x', { inputTokens: 1_000_000 }, [weekday], bj(2026, 9, 7, 10))
+  assert.equal(peakCost.cost, 2)
+  assert.equal(peakCost.active.label, '工作日低谷')
+  const baseCost = customCostOf('acme', 'model-x', { inputTokens: 1_000_000 }, [weekday], bj(2026, 9, 7, 13))
+  assert.equal(baseCost.cost, 10)
+  assert.equal(baseCost.active.label, '基础价')
+
+  const overnight = normalizeCustomPriceRule({
+    ...base,
+    timezone: 'Asia/Shanghai',
+    windows: [{
+      label: '周一夜间', days: [1], start: '22:00', end: '02:00',
+      input: 1, cacheRead: 1, cacheWrite: 1, output: 1,
+    }],
+  })
+  assert.equal(customPriceStatus(overnight, bj(2026, 9, 7, 23)).label, '周一夜间')
+  assert.equal(customPriceStatus(overnight, bj(2026, 9, 8, 1)).label, '周一夜间', 'early Tuesday belongs to Monday cross-midnight window')
+  assert.equal(customPriceStatus(overnight, bj(2026, 9, 8, 2)).label, '基础价')
+
+  const dst = normalizeCustomPriceRule({
+    ...base,
+    timezone: 'America/New_York',
+    windows: [{
+      label: '周日凌晨', days: [0], start: '00:00', end: '03:00',
+      input: 1, cacheRead: 1, cacheWrite: 1, output: 1,
+    }],
+  })
+  assert.equal(customPriceStatus(dst, Date.parse('2026-03-08T06:30:00Z')).label, '周日凌晨')
+  assert.equal(customPriceStatus(dst, Date.parse('2026-03-08T07:30:00Z')).label, '基础价', 'spring-forward skips directly past the window end')
+})
+
+test('custom third-party windows reject invalid timezone, times, weekdays, and overlaps', () => {
+  const base = { provider: 'third', model: 'm', currency: 'CNY', input: 1, cacheRead: 0, cacheWrite: 0, output: 2 }
+  const window = { label: '低谷', days: [1], start: '09:00', end: '12:00', input: 0.5, cacheRead: 0, cacheWrite: 0, output: 1 }
+  assert.equal(normalizeCustomPriceRule({ ...base, timezone: 'Not/A_Real_Zone', windows: [window] }), null)
+  assert.equal(normalizeCustomPriceRule({ ...base, timezone: 'UTC', windows: [{ ...window, start: '24:00' }] }), null)
+  assert.equal(normalizeCustomPriceRule({ ...base, timezone: 'UTC', windows: [{ ...window, days: [7] }] }), null)
+  assert.equal(normalizeCustomPriceRule({ ...base, timezone: 'UTC', windows: [{ ...window, end: '09:00' }] }), null)
+  assert.equal(normalizeCustomPriceRule({
+    ...base,
+    timezone: 'UTC',
+    windows: [window, { ...window, label: '重叠', start: '11:00', end: '13:00' }],
+  }), null)
+  assert.ok(normalizeCustomPriceRule({
+    ...base,
+    timezone: 'UTC',
+    windows: [window, { ...window, label: '相邻', start: '12:00', end: '13:00' }],
+  }), 'touching boundaries are valid')
+  assert.equal(normalizeCustomPriceRule({
+    ...base,
+    timezone: 'UTC',
+    windows: [
+      { ...window, label: '跨午夜', days: [1], start: '22:00', end: '02:00' },
+      { ...window, label: '次日重叠', days: [2], start: '01:00', end: '03:00' },
+    ],
+  }), null)
 })
 
 test('durable UI preference backup accepts only bounded allowlisted string entries', () => {
@@ -1927,6 +2000,26 @@ test('settings section renders populated data from the wallet APIs', async () =>
   assert.ok(/1.98/.test(text), 'the balance figure must render')
 })
 
+test('settings exposes editable timezone, weekdays, and cross-midnight custom price windows', () => {
+  const source = readProjectFile('lib/client.js')
+  assert.match(source, /\.dshw_priceForm\{display:grid;grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/, 'the base price form must fit the settings dialog without horizontal scrolling')
+  const renderer = createHookRenderer()
+  const { exports } = loadClientBundle(renderer.React)
+  const Section = exports.__testing.WalletSettingsSection
+  let tree = renderer.render(Section, { close: () => {} })
+  const addWindow = findElement(tree, (element) => element.type === 'button' && element.props.children === '+ 添加分时段')
+  assert.ok(addWindow)
+  addWindow.props.onClick()
+  tree = renderer.render(Section, { close: () => {} })
+  const timezone = findElement(tree, (element) => element.type === 'input' && element.props['aria-label'] === '第三方计价时区')
+  assert.equal(timezone.props.value, 'Asia/Shanghai')
+  assert.equal(findElement(tree, (element) => element.type === 'input' && element.props['aria-label'] === '分时段 1 开始').props.type, 'time')
+  assert.equal(findElement(tree, (element) => element.type === 'input' && element.props['aria-label'] === '分时段 1 结束').props.value, '09:00')
+  assert.equal(findElement(tree, (element) => element.type === 'button' && element.props['aria-label'] === '星期一').props['aria-pressed'], true)
+  assert.equal(findElement(tree, (element) => element.type === 'button' && element.props['aria-label'] === '星期日').props['aria-pressed'], false)
+  assert.match(JSON.stringify(tree), /分时段可跨午夜/)
+})
+
 test('history panel exposes a collapsed local 365-day ledger entry without mixing it into the chip', () => {
   const renderer = createHookRenderer()
   const { exports } = loadClientBundle(renderer.React)
@@ -2155,6 +2248,67 @@ test('custom third-party pricing route persists exact rates and reprices session
     assert.deepEqual(response.json.session.third.customCosts, {})
     assert.equal(response.json.session.third.tokens.input, 1_000_000, 'removing a price must retain usage')
   } finally {
+    process.env.DSH_HOME = previousHome
+    await new Promise(resolve => setTimeout(resolve, 650))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('time-of-use custom pricing applies each history event time and falls back to base outside windows', async () => {
+  const previousHome = process.env.DSH_HOME
+  const previousNow = Date.now
+  const dir = mkdtempSync(join(tmpdir(), 'dshw-custom-time-price-'))
+  process.env.DSH_HOME = dir
+  const mod = await import('../index.js?custom-time-price-' + dir.replace(/[\\/]/g, '_'))
+  try {
+    const harness = installWalletRouteHarness(mod, undefined)
+    const recordAt = async (atMs, turn) => {
+      Date.now = () => atMs
+      const downstream = async function* () { yield { type: 'usage', usage: { inputTokens: 1_000_000 } } }
+      for await (const _ of harness.usageTap(
+        { sessionId: 'session-custom-time', provider: 'acme', model: 'model-x', turn, step: 1 },
+        () => downstream(),
+      )) {}
+    }
+    await recordAt(bj(2026, 9, 7, 10), 1)
+    await recordAt(bj(2026, 9, 7, 13), 2)
+
+    let response = await harness.call('/api/wallet/custom-prices', 'POST', { rule: {
+      provider: 'acme', model: 'model-x', currency: 'USD',
+      input: 10, cacheRead: 0, cacheWrite: 0, output: 20,
+      timezone: 'Asia/Shanghai',
+      windows: [{
+        label: '工作日低谷', days: [1, 2, 3, 4, 5], start: '09:00', end: '12:00',
+        input: 2, cacheRead: 0, cacheWrite: 0, output: 4,
+      }],
+    } })
+    assert.equal(response.status, 200)
+    assert.equal(response.json.rules[0].active.label, '基础价')
+
+    response = await harness.call('/api/wallet/snapshot', 'GET', undefined, '/api/wallet/snapshot?session=session-custom-time')
+    assert.equal(response.json.session.third.routes[0].customCost.cost, 12)
+    assert.equal(response.json.session.third.routes[0].activePrice.label, '基础价')
+    response = await harness.call('/api/wallet/history', 'GET', undefined, '/api/wallet/history?days=365')
+    assert.equal(response.json.summary.total.customCosts.USD, 12)
+
+    await harness.call('/api/wallet/clear-session', 'POST', { session: 'session-custom-time' })
+    await recordAt(bj(2026, 9, 8, 10, 30), 3)
+    response = await harness.call('/api/wallet/snapshot', 'GET', undefined, '/api/wallet/snapshot?session=session-custom-time')
+    assert.equal(response.json.session.third.routes[0].customCost.cost, 2, 'pre-clear events stay in history but not in the live session estimate')
+
+    response = await harness.call('/api/wallet/custom-prices', 'POST', { rule: {
+      provider: 'acme', model: 'model-x', currency: 'USD',
+      input: 10, cacheRead: 0, cacheWrite: 0, output: 20,
+      timezone: 'Asia/Shanghai',
+      windows: [
+        { label: '上午', days: [1], start: '09:00', end: '12:00', input: 2, cacheRead: 0, cacheWrite: 0, output: 4 },
+        { label: '重叠', days: [1], start: '11:00', end: '13:00', input: 3, cacheRead: 0, cacheWrite: 0, output: 5 },
+      ],
+    } })
+    assert.equal(response.status, 400)
+    assert.equal(response.json.error, 'invalid-custom-price')
+  } finally {
+    Date.now = previousNow
     process.env.DSH_HOME = previousHome
     await new Promise(resolve => setTimeout(resolve, 650))
     rmSync(dir, { recursive: true, force: true })
@@ -2627,7 +2781,10 @@ test('provider aliasing: wrapper routes can join the official bucket (Issue #21)
   assert.equal(isOfficialProvider('deepseek-vision', 'deepseek-vision'), false, 'a non-array whitelist must not match')
   assert.equal(isPlanProvider('zai'), true)
   assert.equal(isPlanProvider('zai-coding-cn'), true)
+  assert.equal(isPlanProvider('vision-toolkit-zai-coding-cn'), true, 'transparent Vision Toolkit plan routes retain plan isolation')
+  assert.equal(isPlanProvider('vision-toolkit-openrouter'), false)
   assert.equal(isOfficialProvider('zai-coding-cn', ['zai-coding-cn']), false, 'subscription providers cannot become DeepSeek aliases')
+  assert.equal(isOfficialProvider('vision-toolkit-zai-coding-cn', ['vision-toolkit-zai-coding-cn']), false, 'wrapped subscription providers cannot become DeepSeek aliases')
 
   assert.deepEqual(normalizeProviderList(null), [])
   assert.deepEqual(normalizeProviderList(['a', 'a', 'deepseek-official', 'zai', 'zai-coding-cn', 42, '']), ['a'], 'dedupe and drop junk, builtin, and plan providers')
@@ -2714,6 +2871,8 @@ test('peak ring clock registers on the sidebar footer slot, not the settings pag
 
 test('sidebar foot ring renders the live peak windows and status labels', async () => {
   const renderer = createHookRenderer()
+  const fixedNow = bj(2026, 8, 20, 20)
+  const FixedDate = class extends Date { static now() { return fixedNow } }
   const mockFetch = () => Promise.resolve({
     ok: true,
     json: () => Promise.resolve({
@@ -2726,7 +2885,7 @@ test('sidebar foot ring renders the live peak windows and status labels', async 
       },
     }),
   })
-  const { exports } = loadClientBundle(renderer.React, { fetch: mockFetch }, { setInterval: () => 0, clearInterval: () => {} })
+  const { exports } = loadClientBundle(renderer.React, { fetch: mockFetch, Date: FixedDate }, { setInterval: () => 0, clearInterval: () => {} })
   const Ring = exports.__testing.PeakRingFooter
   assert.equal(typeof Ring, 'function', 'PeakRingFooter must be exported for render coverage')
   renderer.render(Ring, {}, { flushEffects: true })
@@ -3220,6 +3379,9 @@ test('composer wallet follows the selected provider instead of showing DeepSeek 
   assert.equal(exports.__testing.providerModeFor(
     { provider: 'zai-coding-cn', model: 'glm-5.2' }, snapshot, true,
   ).kind, 'zai')
+  assert.deepEqual({ ...exports.__testing.providerModeFor(
+    { provider: 'vision-toolkit-zai-coding-cn', model: 'glm-5.3' }, snapshot, true,
+  ) }, { kind: 'zai', provider: 'zai-coding-cn', routeProvider: 'vision-toolkit-zai-coding-cn', model: 'glm-5.3' })
   assert.equal(exports.__testing.providerModeFor(
     { provider: 'openrouter', model: 'other-model' }, snapshot, true,
   ).kind, 'third')

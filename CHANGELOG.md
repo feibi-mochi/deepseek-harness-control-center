@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.9 - 2026-09-04
+
+- 第三方 API 自定义价格新增分时计价（Issue #37）：每个精确 Provider/模型可在基础价之上配置多个 IANA 时区、适用星期和起止时间规则，并为输入、缓存读、缓存写、输出分别定价；支持跨午夜时段，当前命中的价格段会在设置和钱包详情中显示。 / Added time-of-use custom third-party API pricing (Issue #37): each exact Provider/model route can define multiple IANA-timezone, weekday, and start/end windows over a base rate, with separate input, cache-read, cache-write, and output prices; cross-midnight windows are supported and the active price segment is shown in Settings and wallet details.
+- 分时规则会拒绝无效时区、日期、时间和重叠范围；365 天账本与当前会话按每条保留用量的发生时间重新估算，缺少时间戳的旧聚合或已清除历史安全回退基础价，且 v0.3.8 固定价格规则无需迁移配置。 / Time-window validation rejects invalid timezones, weekdays, times, and overlaps; the 365-day ledger and live session reprice each retained usage event by occurrence time, while legacy aggregates or cleared history without timestamps safely use the base rate and existing v0.3.8 fixed-price rules remain compatible.
+- 将峰谷时钟渲染测试固定到明确的工作日时间，避免测试结果随执行当天是否周末而波动。 / Pinned the peak-clock rendering test to an explicit weekday so its result no longer depends on the day the suite runs.
+- Vision Toolkit 透明包装的 Z.ai 路由会还原为对应套餐 Provider，模型切换后继续显示 5 小时 Token 与月度 MCP 摘要，而不会误显示为普通第三方价格；DeepSeek 与其他包装路由的既有分桶规则保持不变。 / Z.ai routes transparently wrapped by Vision Toolkit now resolve back to their plan provider so model switches retain five-hour Token and monthly MCP summaries instead of looking like ordinary third-party pricing; existing DeepSeek and other wrapper classification remains unchanged.
+
 ## 0.3.8 - 2026-09-02
 
 - 新增第三方 API 自定义价格（Issue #36）：可按精确 Provider/模型设置币种以及每百万 Token 的输入、缓存读、缓存写和输出价格；本会话与 365 天账本会按当前规则重新估算，并始终标注为用户自定义估算。 / Added custom third-party API pricing (Issue #36) with exact Provider/model matching, currency, and per-million input/cache-read/cache-write/output rates; current-session and 365-day ledger totals are recalculated from the active user rule and always labeled as estimates.

@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-wallet",
-  "description": "Local-first DeepSeek Harness control center for balance monitoring, usage accounting, custom third-party API pricing, a 365-day local token ledger, Z.ai Coding Plan quotas, official pricing sync, encrypted multi-account switching, reminders, recharge, and host-gated session controls.",
-  "version": "0.3.8",
+  "description": "Local-first DeepSeek Harness control center for balance monitoring, usage accounting, time-aware custom third-party API pricing, a 365-day local token ledger, Z.ai Coding Plan quotas, official pricing sync, encrypted multi-account switching, reminders, recharge, and host-gated session controls.",
+  "version": "0.3.9",
   "type": "module",
   "main": "index.js",
   "exports": {

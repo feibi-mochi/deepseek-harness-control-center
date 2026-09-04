@@ -14,7 +14,7 @@
 
 > A local-first companion that keeps account status, per-conversation usage, completion reminders, official recharge, flexible layout, and host-gated session controls beside the DSH composer.
 
-> **Version:** v0.3.8 is the current release on GitHub and npm.
+> **Version:** v0.3.9 is the current release on GitHub and npm.
 
 > If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
 
@@ -29,10 +29,10 @@
 - **v4 peak/off-peak ring clock** — a resident 24-hour sidebar footer widget for `v4-flash`, `v4-pro`, and `v4-flash-vision-exp`. Weekday peak windows are 09:00–12:00 and 14:00–18:00 Beijing time. After Friday 18:00 the card previews “weekend all-day off-peak”; Saturday and Sunday name the current all-day off-peak rule; Monday before 09:00 shows the time remaining to enter peak. Optional notifications treat Friday 18:00 through Monday 09:00 as one continuous off-peak period.
 - **Official pricing sync** — periodically checks the official DeepSeek pricing page and applies only a fully validated table. Network failures retain the last validated rule (or the built-in rule before the first successful sync); an unrecognized page structure is marked for review instead of silently changing billing.
 - **Z.ai Coding Plan quotas** — a generic official-plan adapter monitors configured Global and China plans without exposing credentials. It separates the 5-hour model-token window from monthly MCP-tool usage, leads with quota remaining from 100% down while keeping usage as secondary context, retains the last successful snapshot on failure, and never converts subscription quota into CNY balance.
-- **Provider-aware composer surfaces** — the chip and sidebar clock follow the session's selected provider/model. Z.ai replaces DeepSeek balance, recharge, and peak pricing with plan-window summaries; unrelated providers show only their own session tokens, and DeepSeek V4 restores the wallet and peak clock.
+- **Provider-aware composer surfaces** — the chip and sidebar clock follow the session's selected provider/model. Z.ai—including transparent `vision-toolkit-` variants—replaces DeepSeek balance, recharge, and peak pricing with plan-window summaries; unrelated providers show only their own session tokens, and DeepSeek V4 restores the wallet and peak clock.
 - **365-day local usage ledger** — Wallet settings keeps the heatmap visible, while compact wallet panels keep it collapsible. Stable request identities are deduplicated, official cost is locked at usage time, official and third-party data stay separate, and prompts or responses are never stored. Collection begins after upgrading to v0.3.2; older aggregate counters have no trustworthy dates and are not backfilled.
 - **Third-party total** — current-session tokens (input / cache read / output) remain available with zero configuration.
-- **Custom third-party pricing** — enter an exact Provider/model route, currency, and per-million input/cache-read/cache-write/output rates. Current-session and 365-day ledger costs are recalculated locally from the saved rule and clearly labeled as user-defined estimates, never as provider balances or invoices.
+- **Custom third-party pricing** — enter an exact Provider/model route, currency, and base per-million input/cache-read/cache-write/output rates, then optionally add multiple IANA-timezone, weekday, and cross-midnight pricing windows. Current-session and 365-day ledger costs are recalculated locally by occurrence time and clearly labeled as user-defined estimates, never as provider balances or invoices.
 - **Provider classification** — observed wrapper routes appear in the settings page; opted-in routes join the official token/cost bucket for subsequent calls and are priced with the official table. Existing history is not retroactively reclassified.
 - **Click the chip** to open the detail panel: correctly formatted per-currency balances, cost and token splits, a freely editable low-balance threshold for the active account and currency (two decimals, persisted per account; alerts never mix currencies), manual refresh, and a jump to the official recharge page (first click shows the domain for confirmation — anti-phishing).
 - **Move, dock, and scale** — drag the chip freely, preview nearby snap targets, use compact horizontal or vertical layouts, adjust its scale from the control panel, and show official or third-party data independently. The peak clock background can be explicitly set to transparent (solid on hover) or solid; there is no automatic mode. The choices are remembered locally.
@@ -74,7 +74,7 @@ Details: [compatibility](#browser-desktop-and-os-compatibility) · [data and tru
 
 ## Install
 
-From npm (published stable v0.3.8):
+From npm (published stable v0.3.9):
 
 ```sh
 dsh plugin --profile web add deepseek-harness-wallet
@@ -150,7 +150,7 @@ For buildable DSH hosts, the npm package and repository include a versioned [Age
 | Token accounting | Listens to the `llm/stream` event and buckets per session and provider: `deepseek-official` plus explicitly opted-in wrapper routes use the official bucket; other providers stay third-party; each usage event also locks its contemporaneous official price, so multiple sessions and pricing windows never mix. |
 | Balance | The wallet plugin itself sends the active key directly only to the official `/user/balance` endpoint. When multi-account switching is enabled, the selected key is also written into the DSH credentials seam; DSH may then use it for subsequent model requests. |
 | Accounts | Keys live encrypted in `$DSH_HOME/storages/accounts.json`, with an encrypted `accounts.json.bak` fallback for a missing, corrupt, or undecryptable primary. Windows uses current-user DPAPI; other platforms use an owner-only AES-GCM key file, so move `accounts.json`, `.bak`, and `.key` together. If neither copy can be read, account writes fail closed. |
-| Usage ledger | Local events and custom third-party price rules live in `$DSH_HOME/storages/wallet.json` with a `wallet.json.bak` recovery copy. Missing/corrupt primaries recover automatically; if neither copy is readable, wallet writes fail closed. Up to 365 days of session/provider/model/token metadata and official locked cost are kept—never prompts, tool arguments, response bodies, or API keys. Third-party estimates are recalculated from the current custom rule. |
+| Usage ledger | Local events and custom third-party price rules live in `$DSH_HOME/storages/wallet.json` with a `wallet.json.bak` recovery copy. Missing/corrupt primaries recover automatically; if neither copy is readable, wallet writes fail closed. Up to 365 days of session/provider/model/token metadata and official locked cost are kept—never prompts, tool arguments, response bodies, or API keys. Third-party estimates are recalculated from the current custom rule and each retained event's occurrence time; aggregate usage without a retained timestamp safely falls back to the base rate. |
 | Local settings | Layout, scale, visibility, reminder, and panel settings stay in browser-compatible local storage. |
 | Permanent deletion | Opt-in and host-gated. The wallet never advertises the action unless the host implements the matching session deletion path. |
 | Model surface | No tools registered, no prompt injection, zero token cost. |
@@ -174,7 +174,7 @@ Historical deepseek-chat and deepseek-reasoner records retain their original fla
 
 - [x] 365-day Token heatmap and rebuildable local usage ledger
 - [x] Z.ai Coding Plan Global/China monitoring on a generic official-plan adapter contract
-- [x] User-defined third-party Provider/model pricing
+- [x] User-defined third-party Provider/model base and time-of-use pricing
 - [ ] Additional provider price/balance adapters only after real-account validation
 
 ## License
