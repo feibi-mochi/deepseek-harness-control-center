@@ -2562,13 +2562,14 @@ test('account persistence encrypts API keys instead of writing plaintext', async
       async set() {},
       async resolve() { return undefined },
     })
+    const fixtureKey = 'sk-' + randomBytes(20).toString('hex')
     const response = await harness.call('/api/wallet/accounts', 'POST', {
-      name: '加密账户', apiKey: 'sk-encrypted-1234567890',
+      name: '加密账户', apiKey: fixtureKey,
     })
     assert.equal(response.json.ok, true)
     await new Promise(resolve => setTimeout(resolve, 700))
     const raw = readFileSync(join(dir, 'storages', 'accounts.json'), 'utf8')
-    assert.doesNotMatch(raw, /sk-encrypted-1234567890/)
+    assert.equal(raw.includes(fixtureKey), false)
     assert.match(raw, /apiKeyEncrypted/)
     const stored = JSON.parse(raw)
     assert.equal(stored.version, 2)
@@ -2591,8 +2592,9 @@ test('encrypted accounts survive a full module reload on the current platform', 
       async set() {},
       async resolve() { return undefined },
     })
+    const fixtureKey = 'sk-' + randomBytes(20).toString('hex')
     const added = await firstHarness.call('/api/wallet/accounts', 'POST', {
-      name: '重载账户', apiKey: 'sk-reload-1234567890',
+      name: '重载账户', apiKey: fixtureKey,
     })
     assert.equal(added.json.ok, true)
     await new Promise(resolve => setTimeout(resolve, 750))
@@ -2605,7 +2607,7 @@ test('encrypted accounts survive a full module reload on the current platform', 
     const listed = await secondHarness.call('/api/wallet/accounts', 'GET')
     assert.equal(listed.json.accounts.length, 1)
     assert.equal(listed.json.accounts[0].name, '重载账户')
-    assert.match(listed.json.accounts[0].maskedKey, /^sk-r\*{3}7890$/)
+    assert.equal(listed.json.accounts[0].maskedKey, maskKey(fixtureKey))
     const health = await secondHarness.call('/api/wallet/health', 'GET')
     assert.equal(health.json.accounts.status, 'ready')
   } finally {
@@ -2666,8 +2668,9 @@ test('corrupt primary account file recovers from a valid encrypted backup', asyn
       async set() {},
       async resolve() { return undefined },
     })
+    const fixtureKey = 'sk-' + randomBytes(20).toString('hex')
     const added = await firstHarness.call('/api/wallet/accounts', 'POST', {
-      name: '损坏恢复账户', apiKey: 'sk-corrupt-recovery-1234567890',
+      name: '损坏恢复账户', apiKey: fixtureKey,
     })
     assert.equal(added.json.ok, true)
     await new Promise(resolve => setTimeout(resolve, 750))
@@ -2689,7 +2692,8 @@ test('corrupt primary account file recovers from a valid encrypted backup', asyn
     const health = await secondHarness.call('/api/wallet/health', 'GET')
     assert.equal(health.json.accounts.status, 'recovered')
     await new Promise(resolve => setTimeout(resolve, 750))
-    assert.doesNotMatch(readFileSync(accountPath, 'utf8'), /tampered-ciphertext|sk-corrupt-recovery/)
+    assert.doesNotMatch(readFileSync(accountPath, 'utf8'), /tampered-ciphertext/)
+    assert.equal(readFileSync(accountPath, 'utf8').includes(fixtureKey), false)
     assert.equal(readFileSync(backupPath, 'utf8'), backupBefore, 'valid encrypted backup is preserved during recovery')
   } finally {
     process.env.DSH_HOME = previousHome
@@ -2715,7 +2719,7 @@ test('an unreadable encrypted account store fails closed without overwriting the
     const health = await harness.call('/api/wallet/health', 'GET')
     assert.equal(health.json.accounts.status, 'locked')
     const response = await harness.call('/api/wallet/accounts', 'POST', {
-      name: '不能覆盖', apiKey: 'sk-must-not-overwrite-1234567890',
+      name: '不能覆盖', apiKey: 'sk-' + randomBytes(20).toString('hex'),
     })
     assert.equal(response.status, 423)
     assert.equal(response.json.error, 'account-storage-locked')
