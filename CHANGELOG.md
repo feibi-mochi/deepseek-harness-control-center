@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## 0.3.11 - Unreleased
+## 0.3.11 - 2026-09-05
 
 - 切换账户时清除旧余额并启动独立刷新，取消旧请求并忽略其迟到成功或失败；删除当前账户后重新读取宿主凭据对应的余额。 / Clear cached balance on account switches, start a fresh request, and discard stale successes or failures; refresh the host-credential balance after removing the active account.
 - 设置备份按顺序发送，失败重试保留最新编辑，避免旧请求覆盖已保存的新设置，同时保留有限次数重试。 / Serialize preference backups and retain the newest queued edits across bounded retries so older requests cannot overwrite newer settings.
