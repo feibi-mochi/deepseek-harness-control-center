@@ -42,7 +42,7 @@ The package was renamed from `dsh-wallet` to `deepseek-harness-wallet` in 0.1.1.
 ## Release discipline
 
 - Do not commit, push, tag, create a GitHub Release, or publish to npm without an explicit user confirmation in the current task. Local changes and verification may be completed first, but the release step must wait for approval.
-- Treat maintenance and incremental feature work as patch updates whenever possible. This release is `0.3.10`; use the next patch version for future maintenance. Never publish a lower version afterward.
+- Treat maintenance and incremental feature work as patch updates whenever possible. The working version is `0.3.11` (unreleased); the last published version is `0.3.10`. Never publish a lower version afterward.
 - Before requesting release approval, report the exact version, test result, local deployment status, and the GitHub/npm actions that are still pending.
 
 ## Troubleshooting

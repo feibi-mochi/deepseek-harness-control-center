@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.11 - Unreleased
+
+- 切换账户时清除旧余额并启动独立刷新，取消旧请求并忽略其迟到成功或失败；删除当前账户后重新读取宿主凭据对应的余额。 / Clear cached balance on account switches, start a fresh request, and discard stale successes or failures; refresh the host-credential balance after removing the active account.
+- 设置备份按顺序发送，失败重试保留最新编辑，避免旧请求覆盖已保存的新设置，同时保留有限次数重试。 / Serialize preference backups and retain the newest queued edits across bounded retries so older requests cannot overwrite newer settings.
+- 浏览器拒绝访问 localStorage 属性时，客户端仍可初始化并使用内存回退和宿主设置备份；桌面存储桥保持优先。 / Keep client initialization, memory storage, and host preference hydration working when access to the localStorage property is denied, preserving desktop storage bridge precedence.
+
 ## 0.3.10 - 2026-09-05
 
 - 拆分可读客户端源码并提交可复现的精简加载产物，使每个文件低于 DSH STORE 的 256 KiB 自动审核上限；安装仍不需要构建或运行依赖。 / Split readable client sources and commit a reproducible compact loader artifact below DSH STORE's 256 KiB per-file review bound, retaining build-free installation and zero runtime dependencies.

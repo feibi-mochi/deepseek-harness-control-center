@@ -15,7 +15,7 @@ var useLayoutEffect = React.useLayoutEffect || React.useEffect
 
 var POLL_MS = 15000
 // Keep in lockstep with package.json; a test enforces the sync.
-var WALLET_VERSION = '0.3.10'
+var WALLET_VERSION = '0.3.11'
 var CUSTOM_PRICE_WEEKDAYS = [
   { value: 1, label: '一' }, { value: 2, label: '二' }, { value: 3, label: '三' },
   { value: 4, label: '四' }, { value: 5, label: '五' }, { value: 6, label: '六' }, { value: 0, label: '日' }
@@ -71,7 +71,8 @@ function createCompatibilityAdapter(root) {
   // WebView). Reads for those keys must come from memory, otherwise the
   // fallback write is invisible and the UI keeps reading a stale value.
   var memoryOnly = Object.create(null)
-  var nativeStorage = extension.storage || root.localStorage || null
+  var nativeStorage = null
+  try { nativeStorage = extension.storage || root.localStorage || null } catch (e) { /* even accessing localStorage can be denied */ }
   var pageNotices = new Map()
 
   var storage = {
@@ -301,6 +302,7 @@ var compatibility = createCompatibilityAdapter(window)
 var preferenceBackupQueue = Object.create(null)
 var preferenceBackupTimer = null
 var preferenceBackupRetries = 0
+var preferenceBackupInFlight = null
 var preferenceHydrationPromise = null
 var preferenceTouchedKeys = new Set()
 
@@ -320,18 +322,25 @@ function flushPersistentPreferences() {
     if (typeof window.clearTimeout === 'function') window.clearTimeout(preferenceBackupTimer)
     preferenceBackupTimer = null
   }
+  // Keep writes ordered. A slow failure may only retry against values that
+  // are still queued, never against a newer request that already succeeded.
+  if (preferenceBackupInFlight !== null) return preferenceBackupInFlight
   var entries = preferenceBackupQueue
   preferenceBackupQueue = Object.create(null)
   if (Object.keys(entries).length === 0 || typeof fetch !== 'function') return Promise.resolve(null)
-  return fetch('/api/wallet/preferences', {
+  var saved = false
+  preferenceBackupInFlight = Promise.resolve().then(function () { return fetch('/api/wallet/preferences', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ entries: entries }),
     keepalive: true
-  }).then(function (response) {
+  }) }).then(function (response) {
     if (!response || response.ok === false) throw new Error('preference-backup-failed')
-    preferenceBackupRetries = 0
     return typeof response.json === 'function' ? response.json() : null
+  }).then(function (payload) {
+    saved = true
+    preferenceBackupRetries = 0
+    return payload
   }).catch(function () {
     Object.keys(entries).forEach(function (key) {
       if (!Object.hasOwn(preferenceBackupQueue, key)) preferenceBackupQueue[key] = entries[key]
@@ -341,7 +350,13 @@ function flushPersistentPreferences() {
       preferenceBackupTimer = window.setTimeout(flushPersistentPreferences, preferenceBackupRetries * 750)
     }
     return null
+  }).finally(function () {
+    preferenceBackupInFlight = null
+    // Edits and pagehide flushes can arrive while a request is pending.
+    // Drain them after success; failures retain the bounded retry schedule.
+    if (saved && Object.keys(preferenceBackupQueue).length > 0) return flushPersistentPreferences()
   })
+  return preferenceBackupInFlight
 }
 
 function localPreferenceEntries() {

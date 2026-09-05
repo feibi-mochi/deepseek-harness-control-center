@@ -34,7 +34,7 @@ const TRANSPARENT_PROVIDER_PREFIX = 'vision-toolkit-'
 // DeepSeek's official paid-API bucket by the wrapper-provider alias control.
 const PLAN_PROVIDER_IDS = new Set(PLAN_ADAPTERS.map((adapter) => adapter.provider))
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
-const PLUGIN_VERSION = '0.3.10'
+const PLUGIN_VERSION = '0.3.11'
 const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
 const PRICING_SYNC_INTERVAL_MS = 6 * 60 * 60_000
 const PRICING_SYNC_TIMEOUT_MS = 8_000
@@ -1913,7 +1913,10 @@ export function removeAccount(id) {
   // Deliberately NOT unsetting the credentials seam: the key currently in
   // .credentials.yaml keeps working for LLM billing; the UI just reports
   // "no active account" and balance falls back to the seam key.
-  if (accounts.activeId === id) accounts.activeId = null
+  if (accounts.activeId === id) {
+    accounts.activeId = null
+    invalidateBalance()
+  }
   return { ok: true, thresholdRemoved }
 }
 
@@ -1971,6 +1974,7 @@ export async function activateAccount(ctx, id) {
   }
   accounts.activeId = account.id
   scheduleAccountsSave(ctx.logger)
+  invalidateBalance()
   void refreshBalance(ctx)
   return { ok: true, account: { id: account.id, name: account.name, maskedKey: maskKey(account.apiKey) } }
 }
@@ -2043,8 +2047,18 @@ function recordUsage(options, usage, atMs = Date.now()) {
 
 let balance = { fetchedAt: 0, available: false, balances: [], error: null }
 let balanceRefresh = null
+let balanceGeneration = 0
+let balanceController = null
 
-async function performBalanceRefresh(ctx) {
+function invalidateBalance() {
+  balanceGeneration += 1
+  balance = { fetchedAt: 0, available: false, balances: [], error: null }
+  balanceRefresh = null
+  if (balanceController !== null) balanceController.abort()
+  balanceController = null
+}
+
+async function performBalanceRefresh(ctx, generation) {
   try {
     const credentials = ctx.get('credentials')
     if (credentials === undefined) {
@@ -2052,11 +2066,13 @@ async function performBalanceRefresh(ctx) {
       return
     }
     const key = await resolveBalanceKey(ctx)
+    if (generation !== balanceGeneration) return
     if (key === undefined || key === '') {
       balance = { fetchedAt: Date.now(), available: false, balances: [], error: 'no-api-key' }
       return
     }
     const controller = new AbortController()
+    balanceController = controller
     const timer = setTimeout(() => controller.abort(), 15000)
     try {
       const response = await fetch('https://api.deepseek.com/user/balance', {
@@ -2073,6 +2089,7 @@ async function performBalanceRefresh(ctx) {
         throw error
       }
       const data = await response.json()
+      if (generation !== balanceGeneration) return
       const available = data !== null && typeof data === 'object' && data.is_available === true
       balance = {
         fetchedAt: Date.now(),
@@ -2082,8 +2099,10 @@ async function performBalanceRefresh(ctx) {
       }
     } finally {
       clearTimeout(timer)
+      if (balanceController === controller) balanceController = null
     }
   } catch (error) {
+    if (generation !== balanceGeneration) return
     const code = error && typeof error === 'object' && typeof error.code === 'string'
       ? error.code
       : error && typeof error === 'object' && error.name === 'AbortError'
@@ -2100,11 +2119,13 @@ async function performBalanceRefresh(ctx) {
 
 function refreshBalance(ctx) {
   if (balanceRefresh !== null) return balanceRefresh
+  const generation = balanceGeneration
   // Never let a refresh escape as an unhandled rejection: every caller uses
   // `void refreshBalance(ctx)`, so a throw here would take the host process
   // down (Node exits on unhandled rejections). Absorb it into the error state.
-  balanceRefresh = performBalanceRefresh(ctx)
+  balanceRefresh = performBalanceRefresh(ctx, generation)
     .catch((error) => {
+      if (generation !== balanceGeneration) return
       balance = {
         fetchedAt: Date.now(),
         available: false,
@@ -2116,7 +2137,7 @@ function refreshBalance(ctx) {
       }
     })
     .finally(() => {
-      balanceRefresh = null
+      if (generation === balanceGeneration) balanceRefresh = null
     })
   return balanceRefresh
 }
@@ -2668,10 +2689,12 @@ historyEventCount = store.history && store.history.events ? Object.keys(store.hi
         if (accountStorageLocked) return json(res, 423, { ok: false, error: 'account-storage-locked' })
         const body = await readBody(req)
         if (body === null || typeof body.id !== 'string') return json(res, 400, { ok: false, error: 'id is required' })
+        const wasActive = accounts.activeId === body.id
         const result = removeAccount(body.id)
         if (!result.ok) return json(res, 400, { ok: false, error: result.error })
         scheduleAccountsSave(ctx.logger)
         if (result.thresholdRemoved) scheduleSave(ctx.logger)
+        if (wasActive) void refreshBalance(ctx)
         return json(res, 200, { ok: true, ...accountListView() })
       },
     })
