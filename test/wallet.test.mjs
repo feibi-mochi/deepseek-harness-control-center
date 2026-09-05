@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -2539,7 +2539,7 @@ test('first account rolls back activeId when the host refuses credential synchro
       async resolve() { return undefined },
     })
     const response = await harness.call('/api/wallet/accounts', 'POST', {
-      name: '未同步账户', apiKey: 'sk-unsynced-1234567890',
+      name: '未同步账户', apiKey: 'sk-' + randomBytes(20).toString('hex'),
     })
     assert.equal(response.json.ok, true)
     assert.equal(response.json.synced, false)
@@ -2625,8 +2625,9 @@ test('missing primary account file recovers from its encrypted backup', async ()
       async set() {},
       async resolve() { return undefined },
     })
+    const fixtureKey = 'sk-' + randomBytes(20).toString('hex')
     const added = await firstHarness.call('/api/wallet/accounts', 'POST', {
-      name: '备份恢复账户', apiKey: 'sk-backup-recovery-1234567890',
+      name: '备份恢复账户', apiKey: fixtureKey,
     })
     assert.equal(added.json.ok, true)
     await new Promise(resolve => setTimeout(resolve, 750))
@@ -2647,7 +2648,7 @@ test('missing primary account file recovers from its encrypted backup', async ()
     assert.equal(health.json.accounts.status, 'recovered')
     await new Promise(resolve => setTimeout(resolve, 750))
     assert.equal(existsSync(accountPath), true, 'recovered data is written back to the primary file')
-    assert.doesNotMatch(readFileSync(accountPath, 'utf8'), /sk-backup-recovery/)
+    assert.equal(readFileSync(accountPath, 'utf8').includes(fixtureKey), false)
   } finally {
     process.env.DSH_HOME = previousHome
     await new Promise(resolve => setTimeout(resolve, 100))

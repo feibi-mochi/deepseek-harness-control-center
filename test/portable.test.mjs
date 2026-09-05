@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { randomBytes } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -76,8 +77,9 @@ test('non-Windows AES-GCM account storage persists and reloads without plaintext
   try {
     const first = await import('../index.js?portable-account-a-' + Date.now())
     firstHarness = install(first)
+    const fixtureKey = 'sk-' + randomBytes(20).toString('hex')
     const added = await firstHarness.call('/api/wallet/accounts', 'POST', {
-      name: 'Portable', apiKey: 'sk-portable-platform-1234567890',
+      name: 'Portable', apiKey: fixtureKey,
     })
     assert.equal(added.json.ok, true)
     const threshold = await firstHarness.call('/api/wallet/threshold', 'POST', { threshold: 3.25, currency: 'CNY' })
@@ -97,7 +99,7 @@ test('non-Windows AES-GCM account storage persists and reloads without plaintext
       assert.equal(statSync(walletBackupPath).mode & 0o777, 0o600)
     }
     assert.equal(existsSync(walletBackupPath), true)
-    assert.doesNotMatch(readFileSync(accountPath, 'utf8'), /sk-portable-platform/)
+    assert.equal(readFileSync(accountPath, 'utf8').includes(fixtureKey), false)
     const health = await firstHarness.call('/api/wallet/health')
     assert.equal(health.json.accounts.scheme, 'aes-gcm-file-key')
 
