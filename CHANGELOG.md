@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.10 - 2026-09-05
+
+- 拆分可读客户端源码并提交可复现的精简加载产物，使每个文件低于 DSH STORE 的 256 KiB 自动审核上限；安装仍不需要构建或运行依赖。 / Split readable client sources and commit a reproducible compact loader artifact below DSH STORE's 256 KiB per-file review bound, retaining build-free installation and zero runtime dependencies.
+- 声明 alpha.3、alpha.4、alpha.5、rc.1 的精确 DSH 兼容状态；alpha.4/alpha.5/rc.1 均完成隔离 Profile 安装、冷启动、钱包接口与客户端资源验证、卸载和回退。 / Declare exact DSH compatibility for alpha.3, alpha.4, alpha.5, and rc.1; the latter three passed disposable-profile installation, cold start, wallet endpoints/client resource delivery, removal, and rollback.
+- 增加产物复现与文件体积检查，保留全部钱包、账户、套餐及分时计价回归。 / Add artifact reproducibility and byte-bound checks while retaining wallet, account, plan and time-of-use pricing regressions.
+
 ## 0.3.9 - 2026-09-04
 
 - 第三方 API 自定义价格新增分时计价（Issue #37）：每个精确 Provider/模型可在基础价之上配置多个 IANA 时区、适用星期和起止时间规则，并为输入、缓存读、缓存写、输出分别定价；支持跨午夜时段，当前命中的价格段会在设置和钱包详情中显示。 / Added time-of-use custom third-party API pricing (Issue #37): each exact Provider/model route can define multiple IANA-timezone, weekday, and start/end windows over a base rate, with separate input, cache-read, cache-write, and output prices; cross-midnight windows are supported and the active price segment is shown in Settings and wallet details.

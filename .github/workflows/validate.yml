@@ -21,6 +21,12 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
+      - name: Install locked development tools
+        run: npm ci
+      - name: Verify committed client artifact
+        run: npm run check:client
+      - name: Check store source-size limits
+        run: npm run check:store-size
       - name: Validate package metadata
         run: node -e "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'))"
       - name: Check host syntax

@@ -4,7 +4,7 @@ Instructions for AI agents (e.g. a DeepSeek Harness session) asked to install, v
 
 ## What this is
 
-A zero-dependency, zero-build DeepSeek Harness Web plugin: a wallet chip beside the composer showing official DeepSeek balance, per-session cost and token usage (bucketed per provider), low-balance alerts, a guarded official recharge link, and a draggable floating window / minimized dot mode. Plain JavaScript — no build step, no runtime dependencies.
+A zero-runtime-dependency DeepSeek Harness Web plugin: a wallet chip beside the composer showing official DeepSeek balance, per-session cost and token usage (bucketed per provider), low-balance alerts, a guarded official recharge link, and a draggable floating window / minimized dot mode. The committed client artifact needs no install-time build. Edit readable files under `src/client/`, run `npm ci`, `npm run build:client`, and `npm run check:client`; never hand-edit the generated `lib/client.js`.
 
 ## Prerequisites to check first
 
@@ -42,7 +42,7 @@ The package was renamed from `dsh-wallet` to `deepseek-harness-wallet` in 0.1.1.
 ## Release discipline
 
 - Do not commit, push, tag, create a GitHub Release, or publish to npm without an explicit user confirmation in the current task. Local changes and verification may be completed first, but the release step must wait for approval.
-- Treat maintenance and incremental feature work as patch updates whenever possible. The current stable release is `0.3.8`; the next small release is `0.3.9`. Never publish a lower version afterward.
+- Treat maintenance and incremental feature work as patch updates whenever possible. This release is `0.3.10`; use the next patch version for future maintenance. Never publish a lower version afterward.
 - Before requesting release approval, report the exact version, test result, local deployment status, and the GitHub/npm actions that are still pending.
 
 ## Troubleshooting
@@ -57,7 +57,7 @@ The package was renamed from `dsh-wallet` to `deepseek-harness-wallet` in 0.1.1.
 
 ## Platform adaptation
 
-Keep OS/browser/desktop-wrapper differences inside `createCompatibilityAdapter()` in `lib/client.js`. Do not add Electron, Tauri, Windows, macOS, or Linux branches to wallet accounting, polling, layout, or React rendering. A wrapper may provide the optional synchronous `window.__DSH_WALLET_ADAPTER__` fields documented in README; standards-based browser fallbacks must continue to work when the adapter is absent. Add adapter-focused tests for any new wrapper capability. Never advertise `capabilities.permanentDelete` unless the host implements the matching preference and session-menu action.
+Keep OS/browser/desktop-wrapper differences inside `createCompatibilityAdapter()` in `src/client/core.js` (compiled into `lib/client.js`). Do not add Electron, Tauri, Windows, macOS, or Linux branches to wallet accounting, polling, layout, or React rendering. A wrapper may provide the optional synchronous `window.__DSH_WALLET_ADAPTER__` fields documented in README; standards-based browser fallbacks must continue to work when the adapter is absent. Add adapter-focused tests for any new wrapper capability. Never advertise `capabilities.permanentDelete` unless the host implements the matching preference and session-menu action.
 
 Permanent deletion is a host integration, not a capability implemented by this npm plugin. For a buildable DSH source tree, start with [`integrations/dsh-session-delete/README.md`](./integrations/dsh-session-delete/README.md) and its pinned reference patch. On a different DSH commit, port the documented invariants by semantics; never force-apply the patch or fake the capability signal.
 

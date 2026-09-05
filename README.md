@@ -14,7 +14,7 @@
 
 > A local-first companion that keeps account status, per-conversation usage, completion reminders, official recharge, flexible layout, and host-gated session controls beside the DSH composer.
 
-> **Version:** v0.3.9 is the current release on GitHub and npm.
+> **Version:** v0.3.10.
 
 > If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
 
@@ -74,7 +74,7 @@ Details: [compatibility](#browser-desktop-and-os-compatibility) · [data and tru
 
 ## Install
 
-From npm (published stable v0.3.9):
+From npm:
 
 ```sh
 dsh plugin --profile web add deepseek-harness-wallet
@@ -144,6 +144,8 @@ window.__DSH_WALLET_ADAPTER__ = {
 For buildable DSH hosts, the npm package and repository include a versioned [Agent-assisted permanent-delete integration kit](./integrations/dsh-session-delete/README.md) with a Chinese guide, complete Agent prompt, read-only preflight, compatibility manifest, upstream notice, and an exact-baseline reference patch. The patch is not a universal installer: a different DSH commit must be inspected and adapted by semantics, and closed or non-rebuildable desktop applications remain unsupported.
 
 ## Data & trust
+
+Client development now uses five readable files under `src/client/` and a committed `lib/client.js` artifact; run `npm ci`, `npm run build:client`, and `npm run check:client` after source edits. Installation runs no build scripts. Exact-version smoke checks are documented in [0.3.10 compatibility evidence](https://github.com/feibi-mochi/deepseek-harness-control-center/blob/main/docs/compatibility-0.3.10.md).
 
 | Item | Behavior |
 | --- | --- |

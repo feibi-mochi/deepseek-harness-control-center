@@ -50,6 +50,12 @@ jobs:
           set -euo pipefail
           VERSION="$(node -p "require('./package.json').version")"
           test "$TAG" = "v$VERSION"
+      - name: Install locked development tools
+        run: npm ci
+      - name: Verify committed client artifact
+        run: npm run check:client
+      - name: Check store source-size limits
+        run: npm run check:store-size
       - name: Check syntax
         run: npm run check:syntax
       - name: Run regression tests

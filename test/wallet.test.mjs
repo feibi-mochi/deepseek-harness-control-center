@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
+import { clientSource } from '../scripts/build-client.mjs'
 import {
   PRICE_POLICIES,
   addOfficialUsage,
@@ -42,6 +43,7 @@ import {
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 function readProjectFile(path) {
+  if (path === 'lib/client.js') return clientSource()
   return readFileSync(resolve(REPO_ROOT, path), 'utf8')
 }
 
@@ -206,7 +208,7 @@ test('client bundle registers the loader under the package name', () => {
   // for https://github.com/feibi-mochi/deepseek-harness-control-center/issues/1
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  const match = client.match(/id:\s*'([^']+)'/)
+  const match = client.match(/id:\s*["']([^"']+)["']/)
   assert.ok(match, 'lib/client.js must register a loader module id')
   assert.equal(match[1], pkg.name, 'loader id must equal the package name')
 })
@@ -245,7 +247,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.3.9')
+  assert.equal(pkg.version, '0.3.10')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [

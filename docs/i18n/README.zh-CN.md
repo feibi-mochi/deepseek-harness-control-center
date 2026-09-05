@@ -14,7 +14,7 @@
 
 > 本地优先 DSH 助手：查看账户与本场用量、接收完成提醒、充值，并按宿主能力提供会话控制。
 
-> **版本：** 当前 GitHub 与 npm 发布版本为 v0.3.9。
+> **版本：** v0.3.10。
 
 > 如果 DeepSeek Harness Control Center 帮到了你，请考虑点一个 ⭐ Star，谢谢！
 
@@ -74,7 +74,7 @@ npm 插件负责监控与界面行为；需要宿主配合的能力，只有在 
 
 ## 安装
 
-从 npm 安装（已发布稳定版 v0.3.9）：
+从 npm 安装：
 
 ```sh
 dsh plugin --profile web add deepseek-harness-wallet
@@ -144,6 +144,8 @@ window.__DSH_WALLET_ADAPTER__ = {
 对于可以重新构建的 DSH 宿主，npm 包和仓库同时附带一套版本化的 [Agent 永久删除适配资料](../../integrations/dsh-session-delete/README.zh-CN.md)：包含中英文说明、完整 Agent 提示词、只读预检、兼容清单、上游声明和固定基线参考补丁。它不是通用安装器；DSH 提交不同就必须阅读现有源码并按语义迁移，封闭源码或不能重新构建的桌面端不在支持范围内。
 
 ## 数据与安全
+
+客户端开发源码位于 `src/client/` 的五个文件，`lib/client.js` 是已提交的加载产物。修改后运行 `npm ci`、`npm run build:client` 和 `npm run check:client`；安装时无需构建。各版本的隔离验证范围见 [0.3.10 兼容证据](https://github.com/feibi-mochi/deepseek-harness-control-center/blob/main/docs/compatibility-0.3.10.md)。
 
 | 项目 | 行为 |
 | --- | --- |
