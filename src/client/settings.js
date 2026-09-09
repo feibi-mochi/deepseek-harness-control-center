@@ -595,7 +595,7 @@ function WalletSettingsSection(props) {
   var usageStorage = health && health.usage ? health.usage : null
   var usageLocked = !!((snapshot && snapshot.usageStorage && snapshot.usageStorage.locked) || (usageStorage && usageStorage.locked))
   var compatibilityText = hostCompatibility
-    ? (hostCompatibility.status === 'compatible' ? '兼容' : hostCompatibility.status === 'upgrade-recommended' ? '建议升级' : '待检测')
+    ? (hostCompatibility.status === 'compatible' ? '已声明兼容' : hostCompatibility.status === 'upgrade-recommended' ? '建议升级' : '尚未验证')
     : '检测中'
   var pricingText = pricing
     ? (pricing.status === 'synced'
@@ -1954,4 +1954,3 @@ function PeakRingFooter(props) {
   }
   return isFreeFloating ? renderWithPortal(cardElement) : cardElement
 }
-

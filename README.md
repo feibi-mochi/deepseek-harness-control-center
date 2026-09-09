@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/deepseek-harness-wallet?label=npm&color=5965d8)](https://www.npmjs.com/package/deepseek-harness-wallet)
 [![GitHub release](https://img.shields.io/github/v/release/feibi-mochi/deepseek-harness-control-center?label=release&color=5965d8)](https://github.com/feibi-mochi/deepseek-harness-control-center/releases)
 [![CI](https://github.com/feibi-mochi/deepseek-harness-control-center/actions/workflows/validate.yml/badge.svg)](https://github.com/feibi-mochi/deepseek-harness-control-center/actions/workflows/validate.yml)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.1--rc.2-4aa3ff)](https://github.com/deepseek-ai/DeepSeek-Harness)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.5--alpha.1-4aa3ff)](https://github.com/deepseek-ai/DeepSeek-Harness)
 [![License: MIT](https://img.shields.io/badge/license-MIT-3b7a57)](./LICENSE)
 
 **DeepSeek Harness monitoring, alerts, recharge, and session control center.**
@@ -14,11 +14,13 @@
 
 > A local-first companion that keeps account status, per-conversation usage, completion reminders, official recharge, flexible layout, and host-gated session controls beside the DSH composer.
 
-> **Version:** v0.3.11.
+> **Version:** v0.3.12 (unreleased).
 
 > If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
 
 ## What it does
+
+The wallet UI is currently primarily Chinese and does not yet follow the host language setting (#32). DeepSeek balances come from the official API; cost accounting is a local estimate.
 
 ```
 余额 ¥5.89 · 本场 ¥0.72 · 官 18.8M | 三方 800K · ↗充
@@ -30,7 +32,7 @@
 - **Official pricing sync** — periodically checks the official DeepSeek pricing page and applies only a fully validated table. Network failures retain the last validated rule (or the built-in rule before the first successful sync); an unrecognized page structure is marked for review instead of silently changing billing.
 - **Z.ai Coding Plan quotas** — a generic official-plan adapter monitors configured Global and China plans without exposing credentials. It separates the 5-hour model-token window from monthly MCP-tool usage, leads with quota remaining from 100% down while keeping usage as secondary context, retains the last successful snapshot on failure, and never converts subscription quota into CNY balance.
 - **Provider-aware composer surfaces** — the chip and sidebar clock follow the session's selected provider/model. Z.ai—including transparent `vision-toolkit-` variants—replaces DeepSeek balance, recharge, and peak pricing with plan-window summaries; unrelated providers show only their own session tokens, and DeepSeek V4 restores the wallet and peak clock.
-- **365-day local usage ledger** — Wallet settings keeps the heatmap visible, while compact wallet panels keep it collapsible. Stable request identities are deduplicated, official cost is locked at usage time, official and third-party data stay separate, and prompts or responses are never stored. Collection begins after upgrading to v0.3.2; older aggregate counters have no trustworthy dates and are not backfilled.
+- **Local usage ledger (up to 365 days / 20,000 events)** — Wallet settings keeps the heatmap visible, while compact wallet panels keep it collapsible. Stable request identities are deduplicated, official cost is locked at usage time, official and third-party data stay separate, and prompts or responses are never stored. Collection begins after upgrading to v0.3.2; older aggregate counters have no trustworthy dates and are not backfilled.
 - **Third-party total** — current-session tokens (input / cache read / output) remain available with zero configuration.
 - **Custom third-party pricing** — enter an exact Provider/model route, currency, and base per-million input/cache-read/cache-write/output rates, then optionally add multiple IANA-timezone, weekday, and cross-midnight pricing windows. Current-session and 365-day ledger costs are recalculated locally by occurrence time and clearly labeled as user-defined estimates, never as provider balances or invoices.
 - **Provider classification** — observed wrapper routes appear in the settings page; opted-in routes join the official token/cost bucket for subsequent calls and are priced with the official table. Existing history is not retroactively reclassified.
@@ -39,7 +41,6 @@
 - **Composer-label controls and skin compatibility** — independently show/hide the composer label or reduce it to the primary remaining value (DeepSeek balance, Z.ai five-hour quota) without disabling reminders, settings, plan monitoring, or history. The standard chip also resists broad skin button rules and aligns with maid-atelier's 38px navy-and-gold composer toolbar.
 - **Floating window mode** — detach the detail panel into a draggable window with a remembered position, or minimize it directly to a freely movable dot; the dot turns red below the threshold.
 - **Completion reminders** — optionally notify when a conversation finishes, with persistent or timed modes, queueing and deduplication for simultaneous completions, cross-tab coordination, and an in-page fallback when system notifications are unavailable.
-- **Optional permanent deletion** — when the DSH host advertises a real deletion capability, an opt-in setting enables a confirmed permanent-delete action in the session menu; unsupported hosts keep the control disabled.
 - **Low-balance alert** — below the threshold the chip turns red with a breathing animation and fires one desktop notification; it resets automatically once the balance recovers.
 - **Theme-native UI** — uses DSH `--dsw-alias-*` variables with safe fallback colors, so light and dark themes both render correctly; the panel closes when you click outside and flips open-direction near screen edges.
 - **Clear current-session wallet data** — one button clears only the open conversation's token/cost records; it does not delete the conversation, and every other conversation is untouched. Historical ledger clearing is a separate action.
@@ -47,30 +48,16 @@
 ## Multi-account
 
 - Open the wallet panel → **Account Management（账户管理）** to add accounts (name + API key), switch the active one, or remove them.
-- The first account added becomes the active account automatically and is synced into the credentials seam.
+- Adding the first account attempts to synchronize its key with the host credential store. It activates only if that write succeeds; a refused write retains the saved account without marking it active for billing.
 - Switching prompts a confirmation because it changes **LLM billing** for subsequent requests: the switch writes the account key into the credentials seam (`credentials.set('DEEPSEEK_API_KEY', ...)`), and since the llm-deepseek provider route resolves that reference per request, the very next LLM call is billed with the new account — no restart needed.
 - Account keys are encrypted at rest in `$DSH_HOME/storages/accounts.json`: Windows uses the current user's DPAPI; other platforms use an owner-only AES-GCM key file. An encrypted `.bak` recovers a missing, corrupt, or undecryptable primary file; if neither copy can be read, writes are locked instead of overwriting account data. The UI only shows masked keys.
-- Session usage estimates follow the active account's currency: USD-settled accounts show `本约 $x`, converted from the CNY price table at the vendor's long-standing list ratio (not a live FX rate); CNY accounts show `本场 ¥x`. These are local estimates, not an official invoice.
+- Session usage estimates follow the active account's currency: USD-settled accounts show `本约 $x`, converted from the CNY price table using a fixed estimate of 7.25 CNY per USD (neither a live exchange rate nor the official USD tariff); CNY accounts show `本场 ¥x`. These are local estimates, not an official invoice.
 - If `DEEPSEEK_API_KEY` is supplied by the launching environment, switching is refused with a clear error (the credentials provider rejects shadowed writes) — unset it in your shell to enable switching.
 
 
 ## Project overview
 
-### One place for the signals that matter
-
-DeepSeek Harness can keep several conversations and model providers active at once, but balance, usage, background-task status, and session actions normally live in different places. Control Center brings the information worth checking repeatedly beside the composer, so the current workflow can answer three questions at a glance: **How much official balance remains? What has this conversation used? Does anything need attention?**
-
-### Present when needed, quiet when not
-
-The project is designed around quick reading and in-context action rather than another full-page dashboard. Its compact surface expands only when needed, adapts to the available space, and leaves layout and reminder behavior under the user's control. Accounting remains separated by conversation and provider, while wallet-data cleanup and permanent session deletion remain intentionally different operations.
-
-### Extensible without hiding the boundaries
-
-The npm package handles monitoring and interface behavior; optional host powers are enabled only when DSH actually provides them. That capability-based boundary keeps unsupported actions visibly unavailable and gives browsers or desktop wrappers a small, reviewable adaptation surface. Future providers and controls can therefore be added without changing the established `deepseek-harness-wallet` package identity or silently expanding what the plugin is trusted to do.
-
-> **Want permanent session deletion?** It cannot be enabled by configuring the plugin alone. Give the [integration guide](./integrations/dsh-session-delete/README.md) and [Agent adaptation prompt](./integrations/dsh-session-delete/AGENT_PROMPT.md) to an Agent with access to the buildable DSH source. The control-panel switch becomes available only after the host implementation is built, tested, and advertises the capability.
-
-Details: [compatibility](#browser-desktop-and-os-compatibility) · [data and trust](#data--trust) · [pricing](#pricing-timeline)
+DeepSeek Harness Wallet is for users who want to check balances during a conversation, compare model costs, or manage multiple accounts. A chip beside the composer shows the selected model’s balance, remaining plan quota, or token usage; open it for details or detach it into a floating panel. Settings brings together encrypted accounts, low-balance and completion reminders, a usage heatmap, and fixed or time-of-use prices for third-party APIs. DeepSeek balances and Z.ai quotas come from their respective APIs. Costs are estimated locally from host-reported usage, helping you track consumption without replacing provider invoices.
 
 ## Install
 
@@ -112,12 +99,14 @@ dsh plugin --profile web remove deepseek-harness-wallet
 
 ## Browser, desktop, and OS compatibility
 
+See [0.3.12 compatibility evidence](https://github.com/feibi-mochi/deepseek-harness-control-center/blob/main/docs/compatibility-0.3.12.md). The official 0.1.5-alpha.1 host does not provide this plugin’s permanent-delete capability, so that switch stays disabled; the old source integration patch is not a drop-in update.
+
 The client contains no operating-system-specific feature branch; it checks the Web and host capabilities it needs. That makes the same code portable, but **portable code is not the same as real-device verification**:
 
 | Verification level | Coverage |
 | --- | --- |
-| Real environment checked for this release | Windows + current Edge + DSH Web |
-| Verified Harness versions | `0.1.1-rc.2` and isolated `0.1.2-alpha.3` Web profiles; the alpha profile was built from its official tag and started with no real credentials |
+| Current local verification | Windows + Node 24.18.1 + DSH 0.1.5-alpha.1; keyless Web UI and isolated lifecycle checks. No live paid-API acceptance |
+| Exact host coverage | 0.1.5-alpha.1 checked for this update; earlier 0.1.2-alpha.3/alpha.4/alpha.5/rc.1 evidence belongs to previous wallet releases. Other releases remain unverified |
 | Automated compatibility checks | Browser notification failure, in-page fallback, cross-tab fallback, storage fallback, CSS-scale fallback, and synchronous/asynchronous desktop adapters |
 | Capability-compatible targets | Current Chrome, Edge, and Firefox on Windows/macOS/Linux; Safari on macOS; Electron/Tauri-style DSH wrappers that provide the requirements below |
 
@@ -139,9 +128,13 @@ window.__DSH_WALLET_ADAPTER__ = {
 }
 ```
 
-`notify()` may return a notification-like handle, a Promise for one, or nothing for fire-and-forget native APIs. The payload also includes `onClick` / `onClose` callbacks so Electron IPC, Tauri notification actions, and other desktop bridges can return events without copying wallet logic; returning `false` asks the wallet to use its browser fallback. `requestNotificationPermission()` is optional for hosts such as Tauri and macOS that require a native permission request. Returning `false` from `openExternal()` likewise asks the wallet to try the browser fallback. Declare `permanentDelete` only when the host actually implements the wallet preference and session-menu action; compatible hosts advertise it automatically, while unsupported hosts show a disabled control instead of a switch that has no effect. Platform adaptations are intentionally confined to `createCompatibilityAdapter()` in `lib/client.js`, so an Agent can add a new wrapper without editing wallet accounting or UI logic.
+`notify()` may return a notification-like handle, a Promise for one, or nothing for fire-and-forget native APIs. The payload also includes `onClick` / `onClose` callbacks so Electron IPC, Tauri notification actions, and other desktop bridges can return events without copying wallet logic; returning `false` asks the wallet to use its browser fallback. `requestNotificationPermission()` is optional for hosts such as Tauri and macOS that require a native permission request. Returning `false` from `openExternal()` likewise asks the wallet to try the browser fallback. Declare `permanentDelete` only when the host actually implements the wallet preference and session-menu action; compatible hosts advertise it automatically, while unsupported hosts show a disabled control instead of a switch that has no effect. Platform adaptations are intentionally confined to `createCompatibilityAdapter()` in `src/client/core.js`, so an Agent can add a new wrapper without editing wallet accounting or UI logic.
 
 For buildable DSH hosts, the npm package and repository include a versioned [Agent-assisted permanent-delete integration kit](./integrations/dsh-session-delete/README.md) with a Chinese guide, complete Agent prompt, read-only preflight, compatibility manifest, upstream notice, and an exact-baseline reference patch. The patch is not a universal installer: a different DSH commit must be inspected and adapted by semantics, and closed or non-rebuildable desktop applications remain unsupported.
+
+## Optional host integration
+
+Permanent session deletion is implemented by the host, not the wallet. Its switch remains disabled on the official 0.1.5-alpha.1 host. For a source integration, see the [guide](./integrations/dsh-session-delete/README.md) and [Agent adaptation prompt](./integrations/dsh-session-delete/AGENT_PROMPT.md); the old reference patch is not a drop-in update for newer hosts.
 
 ## Data & trust
 
@@ -152,7 +145,7 @@ Client development now uses five readable files under `src/client/` and a commit
 | Token accounting | Listens to the `llm/stream` event and buckets per session and provider: `deepseek-official` plus explicitly opted-in wrapper routes use the official bucket; other providers stay third-party; each usage event also locks its contemporaneous official price, so multiple sessions and pricing windows never mix. |
 | Balance | The wallet plugin itself sends the active key directly only to the official `/user/balance` endpoint. When multi-account switching is enabled, the selected key is also written into the DSH credentials seam; DSH may then use it for subsequent model requests. |
 | Accounts | Keys live encrypted in `$DSH_HOME/storages/accounts.json`, with an encrypted `accounts.json.bak` fallback for a missing, corrupt, or undecryptable primary. Windows uses current-user DPAPI; other platforms use an owner-only AES-GCM key file, so move `accounts.json`, `.bak`, and `.key` together. If neither copy can be read, account writes fail closed. |
-| Usage ledger | Local events and custom third-party price rules live in `$DSH_HOME/storages/wallet.json` with a `wallet.json.bak` recovery copy. Missing/corrupt primaries recover automatically; if neither copy is readable, wallet writes fail closed. Up to 365 days of session/provider/model/token metadata and official locked cost are kept—never prompts, tool arguments, response bodies, or API keys. Third-party estimates are recalculated from the current custom rule and each retained event's occurrence time; aggregate usage without a retained timestamp safely falls back to the base rate. |
+| Usage ledger | Local events and custom third-party price rules live in `$DSH_HOME/storages/wallet.json` with a `wallet.json.bak` recovery copy. Missing/corrupt primaries recover automatically; if neither copy is readable, wallet writes fail closed. Up to 365 days and 20,000 events of session/provider/model/token metadata and official locked cost are kept—never prompts, tool arguments, response bodies, or API keys. Third-party estimates are recalculated from the current custom rule and each retained event's occurrence time; aggregate usage without a retained timestamp safely falls back to the base rate. |
 | Local settings | Layout, scale, visibility, reminder, and panel settings stay in browser-compatible local storage. |
 | Permanent deletion | Opt-in and host-gated. The wallet never advertises the action unless the host implements the matching session deletion path. |
 | Model surface | No tools registered, no prompt injection, zero token cost. |

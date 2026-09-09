@@ -1668,7 +1668,7 @@ function WalletChip(props) {
   return React.createElement(React.Fragment, null, chipHost, snapPreviewElement, renderedPanel, confirmOverlay)
 }
 
-var inject = ['slots', 'sessions', 'modelDirectories']
+var inject = ['slots', 'sessions', 'modelDirectories', 'remote', 'remote.session']
 
 function apply(ctx) {
   ctx.inject(['sessions'], function (scope) {
@@ -1676,7 +1676,7 @@ function apply(ctx) {
     scope.effect(function () { return installMaidModelMenuGuard() }, 'dsh-wallet: maid model-menu repaint guard')
     scope.effect(function () { return installPersistentPreferenceSync() }, 'dsh-wallet: durable preference sync')
   })
-  ctx.inject(['slots', 'conversation', 'modelDirectories'], function (scope) {
+  ctx.inject(['slots', 'conversation', 'modelDirectories', 'remote', 'remote.session'], function (scope) {
     scope.effect(function () {
       return scope.slots.register({
         name: 'conversation.input.left',

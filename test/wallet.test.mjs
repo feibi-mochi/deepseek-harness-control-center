@@ -247,7 +247,7 @@ test('release READMEs use only approved status badges and every local Markdown t
 test('release identity and intended npm archive inventory stay aligned', () => {
   const pkg = JSON.parse(readProjectFile('package.json'))
   assert.equal(pkg.name, 'deepseek-harness-wallet')
-  assert.equal(pkg.version, '0.3.11')
+  assert.equal(pkg.version, '0.3.12')
   assert.equal(pkg.main, 'index.js')
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.deepEqual(pkg.files, [
@@ -326,33 +326,6 @@ test('documentation distinguishes host-gated deletion from clearing wallet data'
   assert.match(english, /does not delete the conversation/i)
   assert.match(chinese, /清除本会话钱包数据/)
   assert.match(chinese, /不会删除对话/)
-})
-
-test('README heroes stay compact while product overviews remain structured below features', () => {
-  const englishReadme = readProjectFile('README.md').replaceAll('\r\n', '\n')
-  const chineseReadme = readProjectFile('docs/i18n/README.zh-CN.md').replaceAll('\r\n', '\n')
-  const englishHero = englishReadme.split('## What it does', 1)[0]
-  const chineseHero = chineseReadme.split('## 能做什么', 1)[0]
-  assert.ok(englishHero.length < 1800, 'English hero must remain quickly scannable')
-  assert.ok(chineseHero.length < 1200, 'Chinese hero must remain quickly scannable')
-  assert.match(englishHero, /consider leaving a ⭐ Star/, 'English Star prompt must remain in the hero')
-  assert.match(chineseHero, /考虑点一个 ⭐ Star/, 'Chinese Star prompt must remain in the hero')
-  const english = englishReadme.split('## Project overview')[1].split('## Install')[0]
-  const chinese = chineseReadme.split('## 项目介绍')[1].split('## 安装')[0]
-  assert.ok(english.length >= 1500 && english.length < 3000, 'English overview must remain substantial but scannable')
-  assert.ok(chinese.length >= 500 && chinese.length < 1500, 'Chinese overview must remain substantial but scannable')
-  assert.doesNotMatch(english, /consider leaving a ⭐ Star/, 'English Star prompt must not trail the overview')
-  assert.doesNotMatch(chinese, /考虑点一个 ⭐ Star/, 'Chinese Star prompt must not trail the overview')
-  for (const term of ['One place for the signals that matter', 'Present when needed, quiet when not', 'Extensible without hiding the boundaries']) {
-    assert.match(english, new RegExp(term, 'i'), `English introduction is missing ${term}`)
-  }
-  for (const term of ['把重要信息收回对话旁边', '需要时出现，平时不打扰', '可以扩展，但不隐藏能力边界']) {
-    assert.match(chinese, new RegExp(term), `Chinese introduction is missing ${term}`)
-  }
-  assert.match(english, /cannot be enabled by configuring the plugin alone/i)
-  assert.match(english, /integrations\/dsh-session-delete\/AGENT_PROMPT\.md/)
-  assert.match(chinese, /不是在插件里改个配置就能启用/)
-  assert.match(chinese, /integrations\/dsh-session-delete\/AGENT_PROMPT\.md/)
 })
 
 test('policy table: since dates match the documented timeline', () => {

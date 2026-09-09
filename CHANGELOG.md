@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.3.12 - Unreleased
+
+- 修复新版宿主中钱包模型目录调用缺少 `remote.session` 注入而中断工作区/会话界面的问题。 / Declare the remote session dependency required by model-directory calls so workspace/session rendering does not fail on newer hosts.
+- 增加 DSH `0.1.5-alpha.1` 的精确兼容声明；健康检查只对清单中明确记录的版本显示兼容，未来版本保持“尚未验证”。 / Declare exact DSH `0.1.5-alpha.1` compatibility; health checks keep unverified future releases unknown instead of assuming every newer host is compatible.
+- 更新中英文介绍、兼容验证范围、源码位置、账本容量和汇率估算说明，区分钱包功能与宿主删除能力。 / Refresh bilingual feature and compatibility descriptions, source paths, ledger bounds, and currency-estimate limitations; distinguish wallet features from host-provided deletion.
+
 ## 0.3.11 - 2026-09-05
 
 - 切换账户时清除旧余额并启动独立刷新，取消旧请求并忽略其迟到成功或失败；删除当前账户后重新读取宿主凭据对应的余额。 / Clear cached balance on account switches, start a fresh request, and discard stale successes or failures; refresh the host-credential balance after removing the active account.

@@ -34,11 +34,11 @@ const TRANSPARENT_PROVIDER_PREFIX = 'vision-toolkit-'
 // DeepSeek's official paid-API bucket by the wrapper-provider alias control.
 const PLAN_PROVIDER_IDS = new Set(PLAN_ADAPTERS.map((adapter) => adapter.provider))
 const RECHARGE_URL = 'https://platform.deepseek.com/top_up'
-const PLUGIN_VERSION = '0.3.11'
+const PLUGIN_VERSION = '0.3.12'
 const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
 const PRICING_SYNC_INTERVAL_MS = 6 * 60 * 60_000
 const PRICING_SYNC_TIMEOUT_MS = 8_000
-const MIN_HOST_VERSION = '0.1.0-rc.8'
+const MIN_HOST_VERSION = '0.1.2-alpha.3'
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const STORE_PATH = join(DSH_HOME, 'storages', 'wallet.json')
 const STORE_BACKUP_PATH = STORE_PATH + '.bak'
@@ -414,6 +414,7 @@ function detectHostManifest() {
 
 function compareVersions(left, right) {
   const parse = (value) => {
+    if (typeof value !== 'string') return null
     const match = typeof value === 'string' && value.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/)
     if (match === null) return null
     return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]), pre: match[4] || '' }
@@ -431,15 +432,22 @@ function compareVersions(left, right) {
 }
 
 const HOST_MANIFEST = detectHostManifest()
+const COMPATIBILITY_RELEASES = readPackageManifest(new URL('./package.json', import.meta.url))?.dsh?.compatibility?.dshReleases || {}
+
+export function hostCompatibility(hostVersion) {
+  const comparison = compareVersions(hostVersion, MIN_HOST_VERSION)
+  return comparison === null
+    ? { status: 'unknown', minimumVersion: MIN_HOST_VERSION, message: '无法读取 Harness 版本' }
+    : comparison < 0
+      ? { status: 'upgrade-recommended', minimumVersion: MIN_HOST_VERSION, message: 'Harness 版本低于插件建议版本' }
+      : Object.hasOwn(COMPATIBILITY_RELEASES, hostVersion) && COMPATIBILITY_RELEASES[hostVersion] === 'compatible'
+        ? { status: 'compatible', minimumVersion: MIN_HOST_VERSION, message: '该精确版本已声明兼容；验证范围见兼容文档' }
+        : { status: 'unknown', minimumVersion: MIN_HOST_VERSION, message: '该 Harness 版本尚未验证兼容性' }
+}
 
 export function hostHealthSnapshot() {
   const hostVersion = HOST_MANIFEST.version
-  const comparison = compareVersions(hostVersion, MIN_HOST_VERSION)
-  const compatibility = comparison === null
-    ? { status: 'unknown', minimumVersion: MIN_HOST_VERSION, message: '无法读取 Harness 版本' }
-    : comparison >= 0
-      ? { status: 'compatible', minimumVersion: MIN_HOST_VERSION, message: '满足插件最低版本要求' }
-      : { status: 'upgrade-recommended', minimumVersion: MIN_HOST_VERSION, message: 'Harness 版本低于插件建议版本' }
+  const compatibility = hostCompatibility(hostVersion)
   return {
     name: HOST_MANIFEST.name,
     version: hostVersion,

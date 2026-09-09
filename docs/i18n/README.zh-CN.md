@@ -3,7 +3,7 @@
 [![npm 版本](https://img.shields.io/npm/v/deepseek-harness-wallet?label=npm&color=5965d8)](https://www.npmjs.com/package/deepseek-harness-wallet)
 [![GitHub Release](https://img.shields.io/github/v/release/feibi-mochi/deepseek-harness-control-center?label=release&color=5965d8)](https://github.com/feibi-mochi/deepseek-harness-control-center/releases)
 [![构建检查](https://github.com/feibi-mochi/deepseek-harness-control-center/actions/workflows/validate.yml/badge.svg)](https://github.com/feibi-mochi/deepseek-harness-control-center/actions/workflows/validate.yml)
-[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.1--rc.2-4aa3ff)](https://github.com/deepseek-ai/DeepSeek-Harness)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.1.5--alpha.1-4aa3ff)](https://github.com/deepseek-ai/DeepSeek-Harness)
 [![MIT 许可证](https://img.shields.io/badge/license-MIT-3b7a57)](../../LICENSE)
 
 **DeepSeek Harness 监控、提醒、充值与会话控制中心。**
@@ -14,11 +14,13 @@
 
 > 本地优先 DSH 助手：查看账户与本场用量、接收完成提醒、充值，并按宿主能力提供会话控制。
 
-> **版本：** v0.3.11。
+> **版本：** v0.3.12（未发布）。
 
 > 如果 DeepSeek Harness Control Center 帮到了你，请考虑点一个 ⭐ Star，谢谢！
 
 ## 能做什么
+
+钱包界面目前主要为中文，尚未跟随宿主语言设置（#32）。余额来自官方接口；费用统计是本机估算。
 
 ```
 余额 ¥5.89 · 本场 ¥0.72 · 官 18.8M | 三方 800K · ↗充
@@ -30,7 +32,7 @@
 - **官方价格同步**——定期检查 DeepSeek 官方价格页，只有完整校验通过的价格表才会应用。网络失败时沿用上一次已验证规则（首次同步前使用内置规则）；页面结构无法识别时标记为待复核，不会静默修改计费。
 - **Z.ai Coding Plan 套餐额度**——通过通用官方套餐适配器监控已配置的全球区和中国区套餐，不向浏览器暴露凭据；5 小时模型 Token 与月度 MCP 工具额度分开显示，以从 100% 向下消耗的剩余比例为主、已用比例为辅，查询失败保留最近成功数据，也不会把套餐额度换算成人民币余额。
 - **跟随当前 Provider**——输入框标签和侧边栏时钟跟随当前会话选择的 Provider/模型。选择 Z.ai（包括透明的 `vision-toolkit-` 变体）后用套餐窗口摘要替代 DeepSeek 余额、充值和峰谷时钟；其他第三方仅显示自身会话 Token，切回 DeepSeek V4 后恢复钱包与峰谷视图。
-- **365 天本地用量账本**——钱包设置页常态显示热力图，紧凑钱包面板仍可折叠；稳定请求标识会去重，官方费用按发生时锁定，官方/第三方分开，且不保存提示词或回答正文。账本从升级到 v0.3.2 后开始收集，旧聚合数据没有可信日期，因此不会伪造回填。
+- **本地用量账本（最多 365 天 / 20,000 条事件）**——钱包设置页常态显示热力图，紧凑钱包面板仍可折叠；稳定请求标识会去重，官方费用按发生时锁定，官方/第三方分开，且不保存提示词或回答正文。账本从升级到 v0.3.2 后开始收集，旧聚合数据没有可信日期，因此不会伪造回填。
 - **第三方合计**——本会话 token（输入 / 缓存读 / 输出）保持零配置可用。
 - **第三方自定义价格**——可按精确 Provider/模型填写币种及每百万 Token 的基础输入、缓存读、缓存写和输出价格，并可增加多个包含 IANA 时区、适用星期和跨午夜范围的分时段价格；本会话与 365 天账本会按用量发生时间在本机重新估算，并明确标注为自定义估算，不冒充第三方余额或账单。
 - **Provider 分桶**——设置页会列出已观察到的包装路由；勾选后的后续调用计入官方 token/花费桶并按官方价格表计费，既有历史不会追溯重分桶。
@@ -39,7 +41,6 @@
 - **标签控制与皮肤兼容**——输入框标签可独立显示/隐藏，也可开启“仅显示余额”精简为首要剩余额度（DeepSeek 余额、Z.ai 五小时额度）；隐藏不会停止提醒、设置页、套餐监控或历史账本。标准样式会抵抗皮肤过宽的按钮规则，并与 maid-atelier 的 38px 深蓝金边工具栏对齐。
 - **悬浮窗口**——明细面板可切换为位置记忆的拖动窗口，也可直接最小化为自由移动的圆点；低于阈值时圆点变红。
 - **对话完成提醒**——可选择常驻或定时关闭；多个对话同时完成时自动排队、去重，并协调多个标签页；系统通知不可用时改用页面内提醒。
-- **可选的永久删除**——只有 DSH 宿主真正提供会话删除能力时，用户才可主动开启并在二次确认后永久删除；不支持的环境保持禁用。
 - **低余额提醒**——低于阈值时标签变红呼吸 + 桌面通知一次，余额回升后自动复位。
 - **跟随主题**——使用 DSH `--dsw-alias-*` 主题变量并提供安全回退颜色，浅色/深色主题自动适配；面板点外部自动关闭，靠边自动反向展开。
 - **清除本会话钱包数据**——一键只清当前对话的 token/花费记录，不会删除对话，其他会话也不受影响；清除历史账本是独立操作。
@@ -47,30 +48,16 @@
 ## 多账户
 
 - 打开钱包面板 → **账户管理（Account Management）**，可添加账户（名称 + API Key）、切换当前账户或删除账户。
-- 添加的第一个账户自动成为当前账户，并同步写入凭证库。
+- 添加首个账户时会尝试同步到宿主凭证库；只有同步成功才激活。若宿主拒绝写入，账户会保留，但不会显示为当前计费账户。
 - 切换会弹确认框，因为它会改变**后续 LLM 请求的计费**：切换把该账户 key 写入凭证库（`credentials.set('DEEPSEEK_API_KEY', ...)`），llm-deepseek 路由按请求解析该引用，因此**下一次 LLM 调用即用新账户计费，无需重启**。
 - 账户 key 在 `$DSH_HOME/storages/accounts.json` 中加密保存：Windows 使用当前用户 DPAPI，其他系统使用仅限所有者访问的 AES-GCM 密钥文件。加密 `.bak` 可恢复缺失、损坏或无法解密的主文件；主备都不可读时锁定写入，避免覆盖账户。界面只显示掩码。
-- 会话花费跟随当前账户货币：美元结算的账户显示「本约 $x」（按 CNY 价格表以官方长期标价比例折算，非实时汇率）；人民币账户显示「本场 ¥x」。两者都是插件本地估算，不是官方账单。
+- 会话花费跟随当前账户货币：美元结算的账户显示「本约 $x」（按固定 7.25 CNY/USD 系数换算，并非实时汇率或官方美元单价）；人民币账户显示「本场 ¥x」。两者都是插件本地估算，不是官方账单。
 - 若启动环境已提供 `DEEPSEEK_API_KEY`，切换会被明确拒绝（凭证提供方拒绝遮蔽写入）——在 shell 中取消该环境变量即可启用切换。
 
 
 ## 项目介绍
 
-### 把重要信息收回对话旁边
-
-DeepSeek Harness 可以同时运行多个对话并接入不同模型，但余额、用量、后台任务状态和会话操作通常散落在不同位置。Control Center 把值得反复查看的信息放在输入框旁，让用户不用离开当前工作流，就能快速回答三个问题：**官方余额还剩多少？当前对话用了多少？现在有没有事情需要处理？**
-
-### 需要时出现，平时不打扰
-
-这个项目追求的是随手查看、就地操作，而不是再造一个占满页面的后台。紧凑标签只在需要时展开，并根据可用空间调整形态；布局和提醒方式由用户决定。统计按对话和供应商隔离，“清除钱包数据”与“永久删除会话”也始终保持为两种不同操作。
-
-### 可以扩展，但不隐藏能力边界
-
-npm 插件负责监控与界面行为；需要宿主配合的能力，只有在 DSH 确实提供时才会开启。按能力判断而不是按系统名称猜测，既能让不支持的操作明确保持不可用，也为浏览器和桌面壳保留一处小而可审查的适配入口。以后增加新的供应商或控制功能时，也不必改变既有的 `deepseek-harness-wallet` 包标识，或悄悄扩大插件获得的权限。
-
-> **需要永久删除会话？** 这不是在插件里改个配置就能启用的功能。请把[中文适配教程](../../integrations/dsh-session-delete/README.zh-CN.md)和[Agent 适配提示词](../../integrations/dsh-session-delete/AGENT_PROMPT.md)交给能够访问目标 DSH 源码的 Agent；宿主完成实现、构建与验证并声明能力后，控制面板才会开放开关。
-
-详细说明：[兼容性](#浏览器桌面端与系统兼容) · [数据与安全](#数据与安全) · [价格](#价格时间线)
+DeepSeek Harness Wallet 适合希望在对话时查看余额、比较模型开销，或管理多个账户的用户。输入框旁的标签显示当前模型对应的余额、套餐剩余额度或 Token 用量，点开可查看明细，也可拖成浮窗。设置页集中提供加密多账户、低余额与完成提醒、历史用量热力图，以及第三方 API 的固定或分时价格。DeepSeek 余额和 Z.ai 配额来自各自接口，费用则按宿主上报的用量在本机估算；它适合跟踪消耗，不代替供应商账单。
 
 ## 安装
 
@@ -112,12 +99,14 @@ dsh plugin --profile web remove deepseek-harness-wallet
 
 ## 浏览器、桌面端与系统兼容
 
+本轮范围见 [0.3.12 兼容验证](https://github.com/feibi-mochi/deepseek-harness-control-center/blob/main/docs/compatibility-0.3.12.md)。官方 0.1.5-alpha.1 未提供本插件要求的永久删除能力，相关开关保持禁用；旧源码的会话删除补丁不能直接用于新版。
+
 客户端没有按操作系统写死的功能分支，而是检查所需的 Web 与宿主能力；这让同一套代码容易迁移，但必须区分“具备兼容条件”和“已经在真机逐项验证”：
 
 | 验证层级 | 范围 |
 | --- | --- |
-| 本版已完成真实环境检查 | Windows + 当前版 Edge + DSH Web |
-| 已验证 Harness 版本 | `0.1.1-rc.2` 与隔离的 `0.1.2-alpha.3` Web profile；alpha 环境从官方标签构建，未写入真实凭据 |
+| 本轮本地验证 | Windows + Node 24.18.1 + DSH 0.1.5-alpha.1；无真实密钥的 Web 界面与隔离生命周期检查，未验证真实付费 API |
+| 精确宿主覆盖 | 本次检查 0.1.5-alpha.1；此前 0.1.2-alpha.3/alpha.4/alpha.5/rc.1 的证据属于历史钱包版本，其他版本保持未验证 |
 | 已完成自动兼容测试 | 系统通知失败、页面内提醒、跨标签页回退、本地存储回退、CSS 比例回退，以及同步/异步桌面端适配器 |
 | 按能力设计的兼容目标 | Windows/macOS/Linux 上当前版 Chrome、Edge、Firefox，macOS Safari，以及满足下列条件的 Electron/Tauri 类 DSH 桌面端 |
 
@@ -139,9 +128,13 @@ window.__DSH_WALLET_ADAPTER__ = {
 }
 ```
 
-`notify()` 可以返回类通知句柄、返回其 Promise，也可以使用无需返回值的原生 API。载荷中的 `onClick` / `onClose` 让 Electron IPC、Tauri 通知等原生桥把点击和关闭事件传回钱包；返回 `false` 时钱包会改用浏览器回退。部分 Tauri 或 macOS 宿主可通过 `requestNotificationPermission()` 请求原生通知权限。`openExternal()` 返回 `false` 时钱包会继续尝试浏览器打开方式。只有宿主真正实现钱包开关和会话菜单动作时才能声明 `permanentDelete`；兼容宿主会自动声明，不兼容宿主显示禁用状态。所有平台差异集中在 `lib/client.js` 的 `createCompatibilityAdapter()`；以后适配新的桌面壳时，不需要修改钱包计费与界面逻辑。
+`notify()` 可以返回类通知句柄、返回其 Promise，也可以使用无需返回值的原生 API。载荷中的 `onClick` / `onClose` 让 Electron IPC、Tauri 通知等原生桥把点击和关闭事件传回钱包；返回 `false` 时钱包会改用浏览器回退。部分 Tauri 或 macOS 宿主可通过 `requestNotificationPermission()` 请求原生通知权限。`openExternal()` 返回 `false` 时钱包会继续尝试浏览器打开方式。只有宿主真正实现钱包开关和会话菜单动作时才能声明 `permanentDelete`；兼容宿主会自动声明，不兼容宿主显示禁用状态。所有平台差异集中在 `src/client/core.js` 的 `createCompatibilityAdapter()`；以后适配新的桌面壳时，不需要修改钱包计费与界面逻辑。
 
 对于可以重新构建的 DSH 宿主，npm 包和仓库同时附带一套版本化的 [Agent 永久删除适配资料](../../integrations/dsh-session-delete/README.zh-CN.md)：包含中英文说明、完整 Agent 提示词、只读预检、兼容清单、上游声明和固定基线参考补丁。它不是通用安装器；DSH 提交不同就必须阅读现有源码并按语义迁移，封闭源码或不能重新构建的桌面端不在支持范围内。
+
+## 可选宿主集成
+
+永久删除会话不是钱包自身实现的功能。只有宿主提供对应能力时才开放开关；不支持的宿主保持禁用，官方 0.1.5-alpha.1 也不例外。需要自行适配时，参考[中文说明](../../integrations/dsh-session-delete/README.zh-CN.md)和[Agent 适配提示词](../../integrations/dsh-session-delete/AGENT_PROMPT.md)；旧参考补丁不能直接用于新版。
 
 ## 数据与安全
 
@@ -152,7 +145,7 @@ window.__DSH_WALLET_ADAPTER__ = {
 | Token 计费 | 监听 `llm/stream` 事件，按会话和 provider 分桶：`deepseek-official` 及明确勾选的包装路由进入官方桶，其他 provider 保持第三方桶；每次用量同时锁定当时的官方价格，会话与峰谷时段都不串账。 |
 | 余额 | 钱包插件自身只直接把当前 key 作为 `Authorization` 头发往官方 `/user/balance` 接口。启用多账户切换后，所选 key 还会写入 DSH 凭证库；之后 DSH 可能使用它发起模型请求。 |
 | 账户 | key 加密存于 `$DSH_HOME/storages/accounts.json`，加密的 `accounts.json.bak` 可恢复缺失、损坏或无法解密的主文件。Windows 使用当前用户 DPAPI；其他系统使用仅限所有者访问的 AES-GCM 密钥文件，迁移时必须把 `accounts.json`、`.bak` 和 `.key` 一起保存。主备都不可读时拒绝写入。 |
-| 用量账本 | 本地事件和第三方自定义价格保存在 `$DSH_HOME/storages/wallet.json`，并保留 `wallet.json.bak`；主文件缺失或损坏时自动恢复，主备都不可读时拒绝覆盖。最多保留 365 天的会话/provider/模型/token 元数据与官方锁定费用，不保存提示词、工具参数、回答正文或 API Key；第三方费用按当前自定义规则和每条保留事件的发生时间重新估算，缺少时间信息的聚合用量安全回退到基础价。 |
+| 用量账本 | 本地事件和第三方自定义价格保存在 `$DSH_HOME/storages/wallet.json`，并保留 `wallet.json.bak`；主文件缺失或损坏时自动恢复，主备都不可读时拒绝覆盖。最多保留 365 天、20,000 条事件的会话/provider/模型/token 元数据与官方锁定费用，不保存提示词、工具参数、回答正文或 API Key；第三方费用按当前自定义规则和每条保留事件的发生时间重新估算，缺少时间信息的聚合用量安全回退到基础价。 |
 | 本地设置 | 布局、比例、数据显隐、提醒和面板位置保存在兼容浏览器的本地存储中。 |
 | 永久删除 | 默认关闭并受宿主能力限制；宿主未实现真实会话删除链路时，插件不会开放该操作。 |
 | 模型可见性 | 不注册工具、不注入提示词、零 token 消耗。 |

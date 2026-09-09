@@ -1,12 +1,12 @@
 // Reproducible install/start/remove/rollback acceptance in a disposable DSH home.
-// Usage: node scripts/verify-dsh-profile.mjs <pinned-cli-root> <wallet.tgz> <old-wallet.tgz> <port>
+// Usage: node scripts/verify-dsh-profile.mjs <pinned-cli-root> <wallet.tgz> <old-wallet.tgz> <port> [wallet-version] [rollback-version]
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import assert from 'node:assert/strict'
 
-const [runtimeArg, archiveArg, oldArchiveArg, portArg] = process.argv.slice(2)
+const [runtimeArg, archiveArg, oldArchiveArg, portArg, walletVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version, rollbackVersion = '0.3.11'] = process.argv.slice(2)
 const runtime = resolve(runtimeArg)
 const cli = join(runtime, 'node_modules/@deepseek-ai/dsh/lib/bin.js')
 const home = mkdtempSync(join(tmpdir(), 'wallet-dsh-compat-'))
@@ -83,15 +83,15 @@ async function boot(expectedWallet) {
 
 try {
   command(['plugin', '--profile', 'web', 'add', archive])
-  assert.equal(JSON.parse(readFileSync(pkgPath, 'utf8')).version, '0.3.10')
+  assert.equal(JSON.parse(readFileSync(pkgPath, 'utf8')).version, walletVersion)
   result.install = true
-  await boot('0.3.10')
+  await boot(walletVersion)
   result.start = true
   command(['plugin', '--profile', 'web', 'remove', 'deepseek-harness-wallet'])
   await boot(null)
   result.uninstall = true
   command(['plugin', '--profile', 'web', 'add', oldArchive])
-  await boot('0.3.9')
+  await boot(rollbackVersion)
   result.rollback = true
   result.checkedAt = new Date().toISOString()
   console.log(JSON.stringify(result))
