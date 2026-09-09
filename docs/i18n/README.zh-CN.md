@@ -14,7 +14,7 @@
 
 > 本地优先 DSH 助手：查看账户与本场用量、接收完成提醒、充值，并按宿主能力提供会话控制。
 
-> **版本：** v0.3.12（未发布）。
+> **版本：** v0.3.13（未发布）。
 
 > 如果 DeepSeek Harness Control Center 帮到了你，请考虑点一个 ⭐ Star，谢谢！
 
@@ -99,7 +99,7 @@ dsh plugin --profile web remove deepseek-harness-wallet
 
 ## 浏览器、桌面端与系统兼容
 
-本轮范围见 [0.3.12 兼容验证](https://github.com/feibi-mochi/deepseek-harness-control-center/blob/main/docs/compatibility-0.3.12.md)。官方 0.1.5-alpha.1 未提供本插件要求的永久删除能力，相关开关保持禁用；旧源码的会话删除补丁不能直接用于新版。
+本轮范围见 [0.3.13 兼容验证](https://github.com/feibi-mochi/deepseek-harness-control-center/blob/main/docs/compatibility-0.3.13.md)。官方 0.1.5-alpha.1 未提供本插件要求的永久删除能力，相关开关保持禁用；旧源码的会话删除补丁不能直接用于新版。
 
 客户端没有按操作系统写死的功能分支，而是检查所需的 Web 与宿主能力；这让同一套代码容易迁移，但必须区分“具备兼容条件”和“已经在真机逐项验证”：
 

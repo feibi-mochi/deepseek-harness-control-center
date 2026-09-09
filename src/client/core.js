@@ -15,7 +15,7 @@ var useLayoutEffect = React.useLayoutEffect || React.useEffect
 
 var POLL_MS = 15000
 // Keep in lockstep with package.json; a test enforces the sync.
-var WALLET_VERSION = '0.3.12'
+var WALLET_VERSION = '0.3.13'
 var CUSTOM_PRICE_WEEKDAYS = [
   { value: 1, label: '一' }, { value: 2, label: '二' }, { value: 3, label: '三' },
   { value: 4, label: '四' }, { value: 5, label: '五' }, { value: 6, label: '六' }, { value: 0, label: '日' }

@@ -2,7 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
-## 0.3.12 - Unreleased
+## 0.3.13 - Unreleased
+
+- 合并新版工作区选择修复与完整的 Harness 0.1.5-alpha.1 适配；0.3.12 因发布时间早于最后修复提交，保留为过渡版本。 / Include the final workspace-selection fix and complete Harness 0.1.5-alpha.1 adaptation; 0.3.12 remains a transitional release because it predates the final fix.
+
+## 0.3.12 - 2026-09-09
 
 - 修复新版宿主中钱包模型目录调用缺少 `remote.session` 注入而中断工作区/会话界面的问题。 / Declare the remote session dependency required by model-directory calls so workspace/session rendering does not fail on newer hosts.
 - 增加 DSH `0.1.5-alpha.1` 的精确兼容声明；健康检查只对清单中明确记录的版本显示兼容，未来版本保持“尚未验证”。 / Declare exact DSH `0.1.5-alpha.1` compatibility; health checks keep unverified future releases unknown instead of assuming every newer host is compatible.

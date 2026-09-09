@@ -14,7 +14,7 @@
 
 > A local-first companion that keeps account status, per-conversation usage, completion reminders, official recharge, flexible layout, and host-gated session controls beside the DSH composer.
 
-> **Version:** v0.3.12 (unreleased).
+> **Version:** v0.3.13 (unreleased).
 
 > If DeepSeek Harness Control Center helps you, please consider leaving a ⭐ Star. Thank you!
 
@@ -99,7 +99,7 @@ dsh plugin --profile web remove deepseek-harness-wallet
 
 ## Browser, desktop, and OS compatibility
 
-See [0.3.12 compatibility evidence](https://github.com/feibi-mochi/deepseek-harness-control-center/blob/main/docs/compatibility-0.3.12.md). The official 0.1.5-alpha.1 host does not provide this plugin’s permanent-delete capability, so that switch stays disabled; the old source integration patch is not a drop-in update.
+See [0.3.13 compatibility evidence](https://github.com/feibi-mochi/deepseek-harness-control-center/blob/main/docs/compatibility-0.3.13.md). The official 0.1.5-alpha.1 host does not provide this plugin’s permanent-delete capability, so that switch stays disabled; the old source integration patch is not a drop-in update.
 
 The client contains no operating-system-specific feature branch; it checks the Web and host capabilities it needs. That makes the same code portable, but **portable code is not the same as real-device verification**:
 
