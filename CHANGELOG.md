@@ -2,9 +2,9 @@
 
 All notable changes to this project are documented in this file.
 
-## 0.3.13 - Unreleased
+## 0.3.13 - 2026-09-09
 
-- 合并新版工作区选择修复与完整的 Harness 0.1.5-alpha.1 适配；0.3.12 因发布时间早于最后修复提交，保留为过渡版本。 / Include the final workspace-selection fix and complete Harness 0.1.5-alpha.1 adaptation; 0.3.12 remains a transitional release because it predates the final fix.
+- 重新发布版本标识；运行逻辑与 0.3.12 相同，两版均包含工作区依赖修复。此前关于 0.3.12 缺少最后修复的说明不正确。 / Republish version metadata; runtime behavior is unchanged from 0.3.12 and both releases include the workspace dependency fix. The earlier statement that 0.3.12 lacked the final fix was incorrect.
 
 ## 0.3.12 - 2026-09-09
 
