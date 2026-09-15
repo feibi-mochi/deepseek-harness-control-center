@@ -1762,6 +1762,7 @@ exports.__testing = {
   PlanUsagePanel: PlanUsagePanel,
   planErrorText: planErrorText,
   providerModeFor: providerModeFor,
+  peakClockAppliesFor: peakClockAppliesFor,
   UsageHistoryPanel: UsageHistoryPanel,
   settleDotPosition: settleDotPosition
 }

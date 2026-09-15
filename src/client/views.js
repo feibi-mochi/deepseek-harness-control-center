@@ -978,6 +978,28 @@ function isPlanProviderId(provider) {
   return provider === 'zai' || provider === 'zai-coding-cn'
 }
 
+// Whether the sidebar peak clock applies to the selected official model.
+//
+// The host publishes the ids its active pricing policy actually covers
+// (pricingWindows.peakModels), so the clock follows the official pool instead
+// of a hardcoded generation prefix — a rename or a future model shows up
+// without a client rebuild. The prefix test is only the fallback for a host
+// that predates the field; it is never the primary decision.
+var LEGACY_PEAK_MODEL_RE = /^deepseek-v4-/
+
+function peakClockAppliesFor(providerMode, policy) {
+  if (!providerMode || providerMode.kind !== 'deepseek') return false
+  var model = providerMode.model
+  if (typeof model !== 'string' || model === '') {
+    // Without a resolved model the clock cannot be attributed; keep the
+    // historical behaviour of not showing it.
+    return false
+  }
+  var peakModels = policy && Array.isArray(policy.peakModels) ? policy.peakModels : null
+  if (peakModels !== null) return peakModels.indexOf(model) >= 0
+  return LEGACY_PEAK_MODEL_RE.test(model)
+}
+
 function preferredPlanProvider(snapshot, currentMode) {
   if (currentMode && currentMode.kind === 'zai') return currentMode.provider
   var sources = snapshot && snapshot.plans && Array.isArray(snapshot.plans.sources) ? snapshot.plans.sources : []

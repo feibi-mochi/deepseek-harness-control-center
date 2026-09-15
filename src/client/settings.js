@@ -545,18 +545,19 @@ function WalletSettingsSection(props) {
   var list = accounts && accounts.accounts ? accounts.accounts : []
   var rows = []
   var settingsProviderMode = providerModeFor(settingsModelSelection, snapshot || {}, props.modelAware === true)
-  var peakClockApplicable = settingsProviderMode.kind === 'deepseek' && /^deepseek-v4-/.test(settingsProviderMode.model || '')
+  var settingsPolicy = snapshot && snapshot.pricingWindows ? snapshot.pricingWindows : null
+  var peakClockApplicable = peakClockAppliesFor(settingsProviderMode, settingsPolicy)
   var peakClockHint = !ringEnabled
-    ? '已关闭；仅 DeepSeek V4 使用'
+    ? '已关闭；仅 DeepSeek 官方峰谷模型使用'
     : peakClockApplicable
-      ? '当前 DeepSeek V4，侧边栏底部显示'
+      ? '当前模型适用峰谷计价，侧边栏底部显示'
       : settingsProviderMode.kind === 'zai'
-        ? '当前 Z.ai，已自动隐藏；切回 DeepSeek V4 恢复'
+        ? '当前 Z.ai，已自动隐藏；切回 DeepSeek 官方模型恢复'
         : settingsProviderMode.kind === 'third'
-          ? '当前第三方模型，已自动隐藏；切回 DeepSeek V4 恢复'
+          ? '当前第三方模型，已自动隐藏；切回 DeepSeek 官方模型恢复'
           : settingsProviderMode.kind === 'deepseek'
-            ? '当前模型不适用；仅 DeepSeek V4 显示'
-            : '仅当前模型为 DeepSeek V4 时显示'
+            ? '当前模型不适用峰谷计价'
+            : '仅当前模型为 DeepSeek 官方峰谷模型时显示'
 
   // —— 余额卡 ——
   var lowBalance = snapshot && snapshot.lowBalance === true
@@ -1571,7 +1572,7 @@ function PeakRingFooter(props) {
   if (!shown || snapshot === undefined) return null
   var providerMode = providerModeFor(modelSelection, snapshot, modelAware)
   if (providerMode.kind !== 'deepseek') return null
-  if (modelAware && !/^deepseek-v4-/.test(providerMode.model || '')) return null
+  if (modelAware && !peakClockAppliesFor(providerMode, policy)) return null
   var tzName = policy && policy.timezone ? policy.timezone : 'Asia/Shanghai'
   var offsetMinutes = policy && typeof policy.offsetMinutes === 'number' ? policy.offsetMinutes : 480
   var state = peakClockState(policy, wallHourIn(tzName, offsetMinutes, new Date(nowMs)), nowMs)

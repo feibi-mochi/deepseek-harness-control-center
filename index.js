@@ -162,6 +162,10 @@ export function pricingWindowSnapshot(atMs = Date.now()) {
     isPeak: isBeijingPeak(atMs),
     weekendOffPeak,
     weekendOffPeakSince,
+    // Models the active policy actually prices. The client uses this to decide
+    // whether the sidebar clock applies, so a rename or a new generation needs
+    // no client change. A client that predates this field keeps its own gate.
+    peakModels: peakPricedModels(atMs),
   }
 }
 
@@ -199,9 +203,28 @@ export const PRICE_POLICIES = [
       'deepseek-v4-flash-vision-exp': { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] },
     },
   },
+  {
+    // 2026-09-10 12:00 Beijing = 2026-09-10T04:00Z: V4.1 Flash launch, which
+    // reuses the id `deepseek-flash` and lowers the Flash rates. The retired
+    // ids are explicitly still callable and billed at the Flash price.
+    since: Date.UTC(2026, 8, 10, 4),
+    peakOffPeak: true,
+    models: {
+      'deepseek-flash': { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] },
+      'deepseek-v4-flash': { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] },
+      'deepseek-v4-flash-vision-exp': { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] },
+      'deepseek-v4-pro': { cacheHit: [0.15, 0.3], input: [4.5, 9], output: [13.5, 27] },
+    },
+  },
 ]
 
 let activePricePolicies = PRICE_POLICIES
+// Retired id -> canonical id, harvested from the official page footnote.
+let activePriceAliases = {}
+// The single policy produced by the last successful sync. It is replaced (not
+// appended) on every sync so repeated refreshes cannot grow the timeline.
+const PRICING_SYNC_POLICY = 'official-sync'
+let persistedPricing = null
 let pricingSync = {
   status: 'built-in',
   source: PRICING_SOURCE_URL,
@@ -233,6 +256,31 @@ function numericCells(row, count) {
   return values.length === count && values.every((value) => Number.isFinite(value)) ? values : null
 }
 
+// A model column header may carry a footnote marker: the live page renders
+// <td>deepseek-flash<sup>(1)</sup></td>, which decodeHtmlText turns into
+// "deepseek-flash (1)". Strip the marker before treating the cell as an id.
+const MODEL_FOOTNOTE_RE = /\s*[（(]\s*\d+\s*[）)]\s*$/
+const MODEL_ID_RE = /^[a-z][a-z0-9.\-]*$/
+
+function stripFootnote(value) {
+  return String(value ?? '').replace(MODEL_FOOTNOTE_RE, '').trim()
+}
+
+function isPeakRatePair(value) {
+  return Array.isArray(value) && value.length === 2
+    && value.every((rate) => typeof rate === 'number' && Number.isFinite(rate) && rate > 0)
+    && Math.abs(value[1] - value[0] * 2) <= 1e-9
+}
+
+export function normalizePeakRates(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const cacheHit = value.cacheHit
+  const input = value.input
+  const output = value.output
+  if (!isPeakRatePair(cacheHit) || !isPeakRatePair(input) || !isPeakRatePair(output)) return null
+  return { cacheHit: [...cacheHit], input: [...input], output: [...output] }
+}
+
 /**
  * Parse the stable, server-rendered pricing table from DeepSeek's official
  * documentation. A failed parse is deliberately treated as review-required;
@@ -243,25 +291,35 @@ export function parseOfficialPricingHtml(html) {
   const rows = [...html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) =>
     [...match[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => decodeHtmlText(cell[1])),
   ).filter((row) => row.length > 0)
-  const header = rows.find((row) => row.some((cell) => cell === 'deepseek-v4-flash'))
-  const models = header ? header.filter((cell) => /^deepseek-v4-[a-z0-9-]+$/i.test(cell)) : []
-  const requiredModels = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp']
-  if (models.length < requiredModels.length || requiredModels.some((model) => !models.includes(model))) {
+  // The model row is identified structurally (its first cell reads 模型/model)
+  // instead of by looking for one remembered model id, so a rename or a new
+  // generation does not invalidate the parser. Every remaining cell that looks
+  // like an id becomes a column; the rate rows must stay column-aligned.
+  const headerIndex = rows.findIndex((row) => {
+    if (row.length < 2) return false
+    const first = stripFootnote(row[0])
+    if (first !== '模型' && first.toLowerCase() !== 'model') return false
+    return row.slice(1).some((cell) => MODEL_ID_RE.test(stripFootnote(cell)))
+  })
+  if (headerIndex < 0) throw new Error('official pricing model table changed')
+  const models = rows[headerIndex].slice(1).map(stripFootnote).filter((cell) => MODEL_ID_RE.test(cell))
+  if (models.length === 0 || new Set(models).size !== models.length) {
     throw new Error('official pricing model table changed')
   }
 
-  function findPair(label) {
-    const index = rows.findIndex((row) => row.some((cell) => cell.includes(label)) && row.some((cell) => cell.includes('空闲时段')))
+  function findPair(label, fromIndex) {
+    const index = rows.findIndex((row, at) => at > fromIndex
+      && row.some((cell) => cell.includes(label)) && row.some((cell) => cell.includes('空闲时段')))
     if (index < 0 || !rows[index + 1]?.some((cell) => cell.includes('高峰时段'))) throw new Error('official pricing rate rows changed')
     const offPeak = numericCells(rows[index], models.length)
     const peak = numericCells(rows[index + 1], models.length)
     if (offPeak === null || peak === null) throw new Error('official pricing values changed')
-    return { offPeak, peak }
+    return { offPeak, peak, index }
   }
 
-  const cacheHit = findPair('缓存命中')
-  const input = findPair('缓存未命中')
-  const output = findPair('百万tokens输出')
+  const cacheHit = findPair('缓存命中', headerIndex)
+  const input = findPair('缓存未命中', cacheHit.index)
+  const output = findPair('百万tokens输出', input.index)
   for (const pair of [cacheHit, input, output]) {
     for (let index = 0; index < models.length; index += 1) {
       const offPeak = pair.offPeak[index]
@@ -271,13 +329,40 @@ export function parseOfficialPricingHtml(html) {
       }
     }
   }
+  // Every column becomes a priced route. There is deliberately no "required
+  // model" list: the page is the source of truth, and a future generation is
+  // picked up by the same sync that produced this parse.
   const modelsWithRates = {}
-  for (const model of requiredModels) {
+  for (const model of models) {
     const index = models.indexOf(model)
     modelsWithRates[model] = {
       cacheHit: [cacheHit.offPeak[index], cacheHit.peak[index]],
       input: [input.offPeak[index], input.peak[index]],
       output: [output.offPeak[index], output.peak[index]],
+    }
+  }
+
+  // The page states that retired ids stay callable and are billed at the
+  // current model's rates ("旧模型名 <code>a</code>、<code>b</code> 仍可调用 …
+  // 并按 X 价格计费"). Harvest those ids so a host that still reports the old
+  // name is priced instead of silently unpriced. The canonical id is whichever
+  // <code> id precedes the 旧模型名 marker in document order.
+  const aliasMap = {}
+  const markerAt = html.indexOf('旧模型名')
+  if (markerAt >= 0) {
+    const codes = [...html.matchAll(/<code\b[^>]*>([\s\S]*?)<\/code>/gi)]
+      .map((match) => ({ at: match.index, id: decodeHtmlText(match[1]) }))
+      .filter((entry) => MODEL_ID_RE.test(entry.id))
+    const before = codes.filter((entry) => entry.at < markerAt)
+    const canonical = before.length > 0 ? before[before.length - 1].id : null
+    if (canonical !== null && Object.hasOwn(modelsWithRates, canonical)) {
+      const after = codes.filter((entry) => entry.at > markerAt)
+      for (const entry of after) {
+        if (entry.id !== canonical && !Object.hasOwn(modelsWithRates, entry.id)) {
+          aliasMap[entry.id] = canonical
+          modelsWithRates[entry.id] = modelsWithRates[canonical]
+        }
+      }
     }
   }
   const text = decodeHtmlText(html)
@@ -302,25 +387,41 @@ export function parseOfficialPricingHtml(html) {
     ) - BEIJING_OFFSET_MS
   return {
     models: modelsWithRates,
+    aliases: aliasMap,
     peakWindows: parsedWindows,
     weekendOffPeakSince: weekendSince,
-    ruleVersion: 'official-' + createHash('sha256').update(JSON.stringify({ modelsWithRates, parsedWindows, weekendSince })).digest('hex').slice(0, 12),
+    ruleVersion: 'official-' + createHash('sha256').update(JSON.stringify({ modelsWithRates, aliasMap, parsedWindows, weekendSince })).digest('hex').slice(0, 12),
   }
 }
 
-function applyOfficialPricing(parsed, response) {
-  activePricePolicies = PRICE_POLICIES.map((policy) => {
-    const models = {}
-    for (const model of Object.keys(policy.models)) {
-      // The live page describes the current peak/off-peak table. Historical
-      // flat-rate policies must remain immutable or old migrations would receive
-      // array rates and could produce NaN costs after a successful sync.
-      models[model] = policy.peakOffPeak === true && parsed.models[model]
-        ? parsed.models[model]
-        : policy.models[model]
-    }
-    return { ...policy, models }
-  })
+/**
+ * Fold a validated official parse into the active policy timeline.
+ *
+ * The synced table is the CURRENT peak/off-peak generation, so it replaces the
+ * peak-aware policies wholesale — including models that did not exist when
+ * this build shipped. Historical flat-rate policies stay immutable, otherwise
+ * a migration replay would read an [offPeak, peak] pair as a flat rate.
+ */
+function applyOfficialPricing(parsed, response, atMs = Date.now()) {
+  const synced = {}
+  for (const [model, rates] of Object.entries(parsed.models || {})) {
+    const normalized = normalizePeakRates(rates)
+    if (normalized !== null) synced[model] = normalized
+  }
+  const syncedModels = Object.keys(synced)
+  if (syncedModels.length === 0) throw new Error('official pricing parse carried no usable peak rates')
+  // Keep the built-in timeline intact so already-recorded usage keeps the rate
+  // it was billed at, and expose the live table as ONE policy anchored at this
+  // sync. Rebuilding from PRICE_POLICIES means a repeat sync replaces that
+  // entry instead of appending another one.
+  const syncPolicy = {
+    id: PRICING_SYNC_POLICY,
+    since: atMs,
+    peakOffPeak: true,
+    models: synced,
+  }
+  activePricePolicies = [...PRICE_POLICIES, syncPolicy]
+  activePriceAliases = normalizePriceAliases(parsed.aliases)
   peakWindows = parsed.peakWindows.map((window) => ({ ...window }))
   weekendOffPeakSince = parsed.weekendOffPeakSince
   pricingSync = {
@@ -330,9 +431,22 @@ function applyOfficialPricing(parsed, response) {
     etag: response?.headers?.get?.('etag') ?? pricingSync.etag,
     lastModified: response?.headers?.get?.('last-modified') ?? pricingSync.lastModified,
     ruleVersion: parsed.ruleVersion,
-    modelCount: Object.keys(parsed.models).length,
+    modelCount: syncedModels.length,
     message: '已同步官方价格页',
   }
+  persistPricingSnapshot(syncPolicy, activePriceAliases, parsed)
+}
+
+export function normalizePriceAliases(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out = {}
+  for (const [from, to] of Object.entries(value)) {
+    if (!MODEL_ID_RE.test(from) || !MODEL_ID_RE.test(String(to ?? ''))) continue
+    if (from === to) continue
+    out[from] = String(to)
+    if (Object.keys(out).length >= 64) break
+  }
+  return out
 }
 
 async function syncOfficialPricing(logger) {
@@ -470,19 +584,58 @@ export function healthSnapshot() {
 }
 
 export function ratesFor(model, atMs) {
+  // A retired id stays callable and is billed like its replacement. The alias
+  // is a FALLBACK, not a redirect: an older policy may legitimately price the
+  // raw id itself (before the rename), and forcing the alias would erase that
+  // history. So try the literal id first, then its replacement.
+  const alias = Object.hasOwn(activePriceAliases, model) ? activePriceAliases[model] : null
+  const candidates = alias === null || alias === model ? [model] : [model, alias]
   let entry
-  for (const policy of activePricePolicies) {
-    // Own-property check: a model named `__proto__`/`toString` would otherwise
-    // resolve to an Object.prototype member and produce NaN costs.
-    if (atMs >= policy.since && Object.hasOwn(policy.models, model)) entry = policy
+  let resolved = model
+  for (const candidate of candidates) {
+    for (const policy of activePricePolicies) {
+      // Own-property check: a model named `__proto__`/`toString` would otherwise
+      // resolve to an Object.prototype member and produce NaN costs.
+      if (atMs >= policy.since && Object.hasOwn(policy.models, candidate)) { entry = policy; resolved = candidate }
+    }
+    if (entry !== undefined) break
   }
   if (entry === undefined) return null
-  const rates = entry.models[model]
+  const rates = entry.models[resolved]
   if (entry.peakOffPeak === true) {
     const peak = isBeijingPeak(atMs) ? 1 : 0
     return { cacheHit: rates.cacheHit[peak], input: rates.input[peak], output: rates.output[peak] }
   }
   return rates
+}
+
+/**
+ * True when the model currently resolves to peak/off-peak rates. Drives the
+ * sidebar clock so any official model the provider offers (including a future
+ * generation) shows the card without a client rebuild.
+ */
+export function hasPeakPricing(model, atMs = Date.now()) {
+  if (typeof model !== 'string' || model === '') return false
+  const alias = Object.hasOwn(activePriceAliases, model) ? activePriceAliases[model] : null
+  const candidates = alias === null || alias === model ? [model] : [model, alias]
+  for (const candidate of candidates) {
+    for (const policy of activePricePolicies) {
+      if (policy.peakOffPeak === true && atMs >= policy.since && Object.hasOwn(policy.models, candidate)) return true
+    }
+  }
+  return false
+}
+
+export function peakPricedModels(atMs = Date.now()) {
+  const models = new Set()
+  for (const policy of activePricePolicies) {
+    if (policy.peakOffPeak !== true || atMs < policy.since) continue
+    for (const model of Object.keys(policy.models)) models.add(model)
+  }
+  for (const [from, to] of Object.entries(activePriceAliases)) {
+    if (models.has(to)) models.add(from)
+  }
+  return [...models].sort()
 }
 
 export function costOf(model, usage, atMs) {
@@ -1304,6 +1457,11 @@ export function normalizeStoreData(value, atMs = Date.now()) {
     plans: normalizePlanSnapshotCache(source.plans, atMs),
     preferences: normalizeUiPreferences(source.preferences),
   }
+  // Only carried when the store already has it, so an untouched legacy store
+  // is not reported as migrated (and rewritten) just for gaining the key.
+  if (Object.hasOwn(source, 'pricing')) {
+    normalized.pricing = normalizePricingCache(source.pricing, atMs)
+  }
   if (Object.hasOwn(source, 'history')) {
     normalized.history = normalizeHistory(source.history, atMs)
     repairPlanProviderSessionUsage(normalized.sessions, source.history, atMs)
@@ -1319,6 +1477,53 @@ let usageStoreSkipBackupOnce = false
 
 function emptyStoreData() {
   return { version: STORE_VERSION, thresholds: { CNY: DEFAULT_THRESHOLD }, accountThresholds: {}, sessions: {}, officialProviders: [], knownProviders: [], customPrices: [], plans: {}, preferences: {}, history: emptyHistory() }
+}
+
+/**
+ * Persisted result of the last validated official pricing sync. Without this
+ * the synced table lives only in module memory and every host restart falls
+ * back to the built-in snapshot, so a new model would silently stop being
+ * priced until the next 6-hourly refresh happened to run first.
+ */
+function normalizePricingCache(value, atMs = Date.now()) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const since = Number.isFinite(value.since) && value.since > 0 && value.since <= atMs + 86_400_000
+    ? Math.trunc(value.since)
+    : null
+  if (since === null) return null
+  const models = {}
+  for (const [model, rates] of Object.entries(value.models && typeof value.models === 'object' && !Array.isArray(value.models) ? value.models : {})) {
+    if (!MODEL_ID_RE.test(model)) continue
+    const normalized = normalizePeakRates(rates)
+    if (normalized !== null) models[model] = normalized
+    if (Object.keys(models).length >= 64) break
+  }
+  if (Object.keys(models).length === 0) return null
+  return {
+    since,
+    models,
+    aliases: normalizePriceAliases(value.aliases),
+    ruleVersion: typeof value.ruleVersion === 'string' ? value.ruleVersion.slice(0, 80) : null,
+    peakWindows: Array.isArray(value.peakWindows)
+      ? value.peakWindows.filter((window) => window && Number.isInteger(window.startHour) && Number.isInteger(window.endHour)).slice(0, 4)
+      : [],
+    weekendOffPeakSince: Number.isFinite(value.weekendOffPeakSince) ? Math.trunc(value.weekendOffPeakSince) : null,
+  }
+}
+
+function persistPricingSnapshot(policy, aliases, parsed) {
+  const cache = normalizePricingCache({
+    since: policy.since,
+    models: policy.models,
+    aliases,
+    ruleVersion: parsed.ruleVersion,
+    peakWindows: parsed.peakWindows,
+    weekendOffPeakSince: parsed.weekendOffPeakSince,
+  })
+  if (cache === null) return
+  persistedPricing = cache
+  store.pricing = cache
+  scheduleSave()
 }
 
 function readStoreFile(path) {
@@ -1367,6 +1572,38 @@ let store = loadedStore.store
 let storeNeedsSave = loadedStore.migrated || loadedStore.recovered
 historyPrunedDay = historyDayKey(Date.now())
 historyEventCount = store.history && store.history.events ? Object.keys(store.history.events).length : 0
+
+// Re-arm the last validated official pricing sync before anything can bill.
+// The synced table is otherwise module-memory only, so without this a restart
+// would fall back to the built-in snapshot and a newly released (or renamed)
+// model would sit unpriced until the next scheduled refresh happened to run.
+function hydratePersistedPricing(cache) {
+  const normalized = normalizePricingCache(cache)
+  if (normalized === null) return false
+  persistedPricing = normalized
+  activePricePolicies = [...PRICE_POLICIES, {
+    id: PRICING_SYNC_POLICY,
+    since: normalized.since,
+    peakOffPeak: true,
+    models: normalized.models,
+  }]
+  activePriceAliases = { ...normalized.aliases }
+  if (normalized.peakWindows.length > 0) {
+    peakWindows = normalized.peakWindows.map((window) => ({ ...window }))
+  }
+  if (normalized.weekendOffPeakSince !== null) weekendOffPeakSince = normalized.weekendOffPeakSince
+  pricingSync = {
+    ...pricingSync,
+    status: 'synced',
+    checkedAt: 0,
+    ruleVersion: normalized.ruleVersion ?? pricingSync.ruleVersion,
+    modelCount: Object.keys(normalized.models).length,
+    message: '已恢复上次同步的官方价格',
+  }
+  return true
+}
+
+hydratePersistedPricing(store.pricing)
 
 function persistStore(logger) {
   if (saveTimer !== null) {

@@ -38,6 +38,10 @@ import {
   normalizeAccountsData,
   maskKey,
   validateApiKey,
+  hasPeakPricing,
+  peakPricedModels,
+  normalizePeakRates,
+  normalizePriceAliases,
 } from '../index.js'
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -329,7 +333,7 @@ test('documentation distinguishes host-gated deletion from clearing wallet data'
 })
 
 test('policy table: since dates match the documented timeline', () => {
-  assert.equal(PRICE_POLICIES.length, 4)
+  assert.equal(PRICE_POLICIES.length, 5)
   // 2025-02-09: deepseek-chat / deepseek-reasoner.
   assert.equal(PRICE_POLICIES[0].since, Date.UTC(2025, 1, 9))
   // 2026-04-24: v4 flat rates (V4 preview launch).
@@ -341,6 +345,11 @@ test('policy table: since dates match the documented timeline', () => {
   assert.equal(PRICE_POLICIES[3].since, Date.UTC(2026, 7, 20, 16))
   assert.equal(PRICE_POLICIES[3].peakOffPeak, true)
   assert.deepEqual(PRICE_POLICIES[3].models['deepseek-v4-flash-vision-exp'], { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] })
+  // 2026-09-10 12:00 Beijing = 2026-09-10T04:00Z: V4.1 Flash reuses the id
+  // `deepseek-flash` and lowers the Flash rates.
+  assert.equal(PRICE_POLICIES[4].since, Date.UTC(2026, 8, 10, 4))
+  assert.equal(PRICE_POLICIES[4].peakOffPeak, true)
+  assert.deepEqual(PRICE_POLICIES[4].models['deepseek-flash'], { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] })
 })
 
 test('official pricing parser reads vision rates and the weekend rule', () => {
@@ -576,6 +585,101 @@ test('sumBalances: prefers the CNY record, never mixes currencies', () => {
   assert.equal(sumBalances(null), 0)
   // Non-numeric records are ignored rather than NaN-poisoning the total.
   assert.equal(sumBalances([{ currency: 'CNY', total_balance: 'nope' }, usd]), 50)
+})
+
+test('official pricing parser reads the current renamed table with footnotes', () => {
+  // Mirrors the live 2026-09-10 page: the model row carries footnote markers
+  // and the leading column is the V4.1 id `deepseek-flash`, not a v4-* name.
+  const html = `<table>
+    <tr><td colspan="3">模型</td><td>deepseek-flash<sup>(1)</sup></td><td>deepseek-v4-pro<sup>(2)</sup></td></tr>
+    <tr><td rowspan="6">价格<sup>(3)</sup></td><td rowspan="2">百万tokens输入<br>（缓存命中）</td><td>空闲时段</td><td>0.02元</td><td>0.15元</td></tr>
+    <tr><td>高峰时段</td><td>0.04元</td><td>0.30元</td></tr>
+    <tr><td rowspan="2">百万tokens输入<br>（缓存未命中）</td><td>空闲时段</td><td>1元</td><td>4.5元</td></tr>
+    <tr><td>高峰时段</td><td>2元</td><td>9.0元</td></tr>
+    <tr><td rowspan="2">百万tokens输出</td><td>空闲时段</td><td>4元</td><td>13.5元</td></tr>
+    <tr><td>高峰时段</td><td>8元</td><td>27.0元</td></tr>
+  </table>
+  <p>(1) 模型名请使用 <code>deepseek-flash</code>。旧模型名 <code>deepseek-v4-flash</code>、<code>deepseek-v4-flash-vision-exp</code> 仍可调用，但对应模型已下线，请求将由 DeepSeek-V4.1-Flash 模型提供服务，并按 Flash 价格计费。</p>
+  <p>(3) 空闲时段价格为高峰时段价格的一半。高峰时段为北京时间周一至周五 9:00 - 12:00、14:00 - 18:00（其余为空闲时段）。</p>${'x'.repeat(500)}`
+  const parsed = parseOfficialPricingHtml(html)
+  assert.deepEqual(parsed.models['deepseek-flash'], { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] })
+  assert.deepEqual(parsed.models['deepseek-v4-pro'], { cacheHit: [0.15, 0.3], input: [4.5, 9], output: [13.5, 27] })
+  // Retired ids are harvested from the footnote and billed at the current rate.
+  assert.deepEqual(parsed.aliases, {
+    'deepseek-v4-flash': 'deepseek-flash',
+    'deepseek-v4-flash-vision-exp': 'deepseek-flash',
+  })
+  assert.deepEqual(parsed.models['deepseek-v4-flash'], parsed.models['deepseek-flash'])
+})
+
+test('official pricing parser accepts a structurally valid table with any model set', () => {
+  // A future generation with unknown ids must parse: no hardcoded model list.
+  const html = `<table>
+    <tr><td>模型</td><td>deepseek-v5-turbo</td><td>deepseek-v5-pro</td></tr>
+    <tr><td>百万tokens输入（缓存命中）</td><td>空闲时段</td><td>0.01元</td><td>0.2元</td></tr>
+    <tr><td>高峰时段</td><td>0.02元</td><td>0.4元</td></tr>
+    <tr><td>百万tokens输入（缓存未命中）</td><td>空闲时段</td><td>0.5元</td><td>3元</td></tr>
+    <tr><td>高峰时段</td><td>1元</td><td>6元</td></tr>
+    <tr><td>百万tokens输出</td><td>空闲时段</td><td>2元</td><td>10元</td></tr>
+    <tr><td>高峰时段</td><td>4元</td><td>20元</td></tr>
+  </table>
+  <p>空闲时段价格为高峰时段价格的一半。高峰时段为北京时间周一至周五 9:00 - 12:00、14:00 - 18:00（其余为空闲时段）。</p>${'x'.repeat(500)}`
+  const parsed = parseOfficialPricingHtml(html)
+  assert.deepEqual(Object.keys(parsed.models).sort(), ['deepseek-v5-pro', 'deepseek-v5-turbo'])
+  assert.deepEqual(parsed.models['deepseek-v5-turbo'], { cacheHit: [0.01, 0.02], input: [0.5, 1], output: [2, 4] })
+  assert.deepEqual(parsed.aliases, {})
+})
+
+test('a synced table prices models this build never shipped, and retired ids resolve by alias', () => {
+  const at = bj(2026, 9, 15, 10, 0)
+  hostTesting.applyOfficialPricing({
+    models: {
+      'deepseek-flash': { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] },
+      'deepseek-v5-hypothetical': { cacheHit: [0.01, 0.02], input: [0.5, 1], output: [2, 4] },
+      'deepseek-v4-flash': { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] },
+    },
+    aliases: { 'deepseek-v4-flash-vision-exp': 'deepseek-flash' },
+    peakWindows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+    weekendOffPeakSince: bj(2026, 8, 23, 0),
+    ruleVersion: 'official-test-v5',
+  }, { headers: { get() { return null } } }, at)
+  // A model absent from the built-in table is now priced from the live table.
+  assert.deepEqual(ratesFor('deepseek-v5-hypothetical', at), { cacheHit: 0.02, input: 1, output: 4 })
+  // The alias resolves a retired id onto the current model's rates.
+  assert.deepEqual(ratesFor('deepseek-v4-flash-vision-exp', at), { cacheHit: 0.04, input: 2, output: 8 })
+  // Gating for the sidebar clock follows the synced pool, not a name prefix.
+  assert.equal(hasPeakPricing('deepseek-v5-hypothetical', at), true)
+  assert.equal(hasPeakPricing('gpt-5', at), false)
+  const models = peakPricedModels(at)
+  assert.ok(models.includes('deepseek-flash'))
+  assert.ok(models.includes('deepseek-v5-hypothetical'))
+  assert.ok(models.includes('deepseek-v4-flash-vision-exp'))
+})
+
+test('alias resolution never rewrites an older policy that prices the raw id', () => {
+  const at = bj(2026, 5, 1, 10, 0)
+  hostTesting.applyOfficialPricing({
+    models: { 'deepseek-flash': { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] } },
+    aliases: { 'deepseek-v4-flash': 'deepseek-flash' },
+    peakWindows: [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }],
+    weekendOffPeakSince: bj(2026, 8, 23, 0),
+    ruleVersion: 'official-test-alias',
+  }, { headers: { get() { return null } } }, Date.UTC(2026, 8, 10, 4))
+  // Before the rename the id had its own flat policy; the alias is a fallback,
+  // so history keeps the rate it was actually billed at.
+  assert.deepEqual(ratesFor('deepseek-v4-flash', at), { cacheHit: 0.02, input: 1, output: 2 })
+  assert.equal(ratesFor('deepseek-v4-flash-vision-exp', at), null)
+})
+
+test('pricing rate and alias normalizers reject malformed sync payloads', () => {
+  assert.deepEqual(normalizePeakRates({ cacheHit: [1, 2], input: [1, 2], output: [4, 8] }), { cacheHit: [1, 2], input: [1, 2], output: [4, 8] })
+  // Peak must be exactly twice off-peak.
+  assert.equal(normalizePeakRates({ cacheHit: [1, 3], input: [1, 2], output: [4, 8] }), null)
+  assert.equal(normalizePeakRates({ cacheHit: [1, 2], input: [1, 2] }), null)
+  assert.equal(normalizePeakRates({ cacheHit: [1, 2], input: [1, 2], output: [0, 0] }), null)
+  assert.equal(normalizePeakRates(null), null)
+  assert.deepEqual(normalizePriceAliases({ 'deepseek-v4-flash': 'deepseek-flash', bad: 'Not An Id', same: 'same' }), { 'deepseek-v4-flash': 'deepseek-flash' })
+  assert.deepEqual(normalizePriceAliases(null), {})
 })
 
 test('official cost is accumulated at usage time and remains stable later', () => {
@@ -3032,7 +3136,7 @@ test('settings expose the ring switch and the switch-reminder toggle', () => {
   assert.equal(ringToggle.props.checked, true, 'the ring defaults to on')
   assert.equal(notifyToggle.props.checked, false, 'reminders stay opt-in')
   const source = readProjectFile('lib/client.js')
-  assert.match(source, /当前 Z\.ai，已自动隐藏；切回 DeepSeek V4 恢复/, 'settings explains why an enabled clock is hidden for Z.ai')
+  assert.match(source, /当前 Z\.ai，已自动隐藏；切回 DeepSeek 官方模型恢复/, 'settings explains why an enabled clock is hidden for Z.ai')
   assert.match(source, /sessionsService: ctx\.sessions/, 'the settings section receives the current-session service')
   assert.match(source, /modelDirectories: ctx\.modelDirectories/, 'the settings section receives live model selection')
 })
@@ -3374,7 +3478,7 @@ test('composer wallet follows the selected provider instead of showing DeepSeek 
 
   const source = readProjectFile('lib/client.js')
   assert.match(source, /if \(providerMode\.kind !== 'deepseek'\) return null/, 'the peak clock disappears outside DeepSeek')
-  assert.match(source, /if \(modelAware && !\/\^deepseek-v4-\//, 'the peak clock is limited to the V4 pricing family')
+  assert.match(source, /peakClockAppliesFor\(providerMode, policy\)/, 'the peak clock follows the host-published peak model list')
   assert.match(source, /activeProviderMode\.kind === 'zai'/, 'the composer chip has a Z.ai-specific presentation')
   assert.match(source, /'5h 剩' \+ planTokenRemaining/, 'the Z.ai chip shows remaining five-hour quota')
   assert.match(source, /'MCP 剩' \+ planToolRemaining/, 'the Z.ai chip shows remaining monthly tool quota')
