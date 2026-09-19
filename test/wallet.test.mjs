@@ -329,7 +329,7 @@ test('documentation distinguishes host-gated deletion from clearing wallet data'
 })
 
 test('policy table: since dates match the documented timeline', () => {
-  assert.equal(PRICE_POLICIES.length, 4)
+  assert.equal(PRICE_POLICIES.length, 5)
   // 2025-02-09: deepseek-chat / deepseek-reasoner.
   assert.equal(PRICE_POLICIES[0].since, Date.UTC(2025, 1, 9))
   // 2026-04-24: v4 flat rates (V4 preview launch).
@@ -341,6 +341,53 @@ test('policy table: since dates match the documented timeline', () => {
   assert.equal(PRICE_POLICIES[3].since, Date.UTC(2026, 7, 20, 16))
   assert.equal(PRICE_POLICIES[3].peakOffPeak, true)
   assert.deepEqual(PRICE_POLICIES[3].models['deepseek-v4-flash-vision-exp'], { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] })
+  // 2026-09-10: DeepSeek-V4.1-Flash launch, renamed to `deepseek-flash` with
+  // reduced prices. 2026-09-10 00:00 Beijing = 2026-09-09T16:00Z.
+  assert.equal(PRICE_POLICIES[4].since, Date.UTC(2026, 8, 9, 16))
+  assert.equal(PRICE_POLICIES[4].peakOffPeak, true)
+  assert.deepEqual(PRICE_POLICIES[4].models['deepseek-flash'], { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] })
+  assert.deepEqual(PRICE_POLICIES[4].models['deepseek-v4-flash'], { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] })
+})
+
+test('ratesFor: 2026-09-10 V4.1 Flash rename, price cut, and host aliases', () => {
+  // Retired flat names keep their historical rates up to the boundary.
+  assert.deepEqual(ratesFor('deepseek-v4-flash', bj(2026, 9, 9, 20)), { cacheHit: 0.05, input: 1.5, output: 4.5 })
+  assert.deepEqual(ratesFor('deepseek-v4-flash', bj(2026, 9, 9, 10)), { cacheHit: 0.1, input: 3, output: 9 })
+  // The renamed model does not exist before 2026-09-10.
+  assert.equal(ratesFor('deepseek-flash', bj(2026, 9, 9, 23, 59)), null)
+  assert.equal(ratesFor('deepseek-v4.1-flash', bj(2026, 9, 9, 23, 59)), null)
+  // From the boundary the renamed model, the retired names, and the host
+  // aliases all follow the reduced peak/off-peak table.
+  assert.deepEqual(ratesFor('deepseek-flash', bj(2026, 9, 10, 0)), { cacheHit: 0.02, input: 1, output: 4 })
+  assert.deepEqual(ratesFor('deepseek-v4.1-flash', bj(2026, 9, 10, 10)), { cacheHit: 0.04, input: 2, output: 8 })
+  assert.deepEqual(ratesFor('deepseek-v4-flash', bj(2026, 9, 11, 20)), { cacheHit: 0.02, input: 1, output: 4 })
+  assert.deepEqual(ratesFor('deepseek-v4.1-flash-expires-on-0910', bj(2026, 9, 11, 20)), { cacheHit: 0.02, input: 1, output: 4 })
+  assert.deepEqual(ratesFor('deepseek-ai/DeepSeek-V4-Flash', bj(2026, 9, 11, 20)), { cacheHit: 0.02, input: 1, output: 4 })
+  // Weekends stay off-peak after the rename.
+  assert.deepEqual(ratesFor('deepseek-v4.1-flash', bj(2026, 9, 12, 10)), { cacheHit: 0.02, input: 1, output: 4 })
+  // V4 Pro keeps its rates and also resolves the wrapper alias.
+  assert.deepEqual(ratesFor('deepseek-v4-pro', bj(2026, 9, 11, 10)), { cacheHit: 0.3, input: 9, output: 27 })
+  assert.deepEqual(ratesFor('deepseek-ai/DeepSeek-V4-Pro', bj(2026, 9, 11, 10)), { cacheHit: 0.3, input: 9, output: 27 })
+})
+
+test('official pricing parser accepts the renamed Flash column with footnote markers', () => {
+  const html = `<table>
+    <tr><td>模型</td><td>deepseek-flash<sup>(1)</sup></td><td>deepseek-v4-pro<sup>(2)</sup></td></tr>
+    <tr><td>百万tokens输入（缓存命中）</td><td>空闲时段</td><td>0.02元</td><td>0.15元</td></tr>
+    <tr><td>高峰时段</td><td>0.04元</td><td>0.30元</td></tr>
+    <tr><td>百万tokens输入（缓存未命中）</td><td>空闲时段</td><td>1元</td><td>4.5元</td></tr>
+    <tr><td>高峰时段</td><td>2元</td><td>9.0元</td></tr>
+    <tr><td>百万tokens输出</td><td>空闲时段</td><td>4元</td><td>13.5元</td></tr>
+    <tr><td>高峰时段</td><td>8元</td><td>27.0元</td></tr>
+  </table>
+  <p>空闲时段价格为高峰时段价格的一半。高峰时段为北京时间周一至周五 9:00 - 12:00、14:00 - 18:00（其余为空闲时段）。</p>${'x'.repeat(500)}`
+  const parsed = parseOfficialPricingHtml(html)
+  assert.deepEqual(parsed.models, {
+    'deepseek-flash': { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] },
+    'deepseek-v4-pro': { cacheHit: [0.15, 0.3], input: [4.5, 9], output: [13.5, 27] },
+  })
+  assert.deepEqual(parsed.peakWindows, [{ startHour: 9, endHour: 12 }, { startHour: 14, endHour: 18 }])
+  assert.equal(parsed.weekendOffPeakSince, bj(2026, 8, 23, 0, 0))
 })
 
 test('official pricing parser reads vision rates and the weekend rule', () => {

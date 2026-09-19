@@ -199,7 +199,35 @@ export const PRICE_POLICIES = [
       'deepseek-v4-flash-vision-exp': { cacheHit: [0.05, 0.1], input: [1.5, 3], output: [4.5, 9] },
     },
   },
+  {
+    // 2026-09-10: DeepSeek-V4.1-Flash launch. The model was renamed to
+    // `deepseek-flash` and the API prices were cut; the retired names
+    // `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` stay routable to
+    // V4.1 Flash on the same (reduced) table, and host aliases resolve through
+    // MODEL_ALIASES. V4 Pro keeps its rates.
+    since: Date.UTC(2026, 8, 9, 16),
+    peakOffPeak: true,
+    models: {
+      'deepseek-flash': { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] },
+      'deepseek-v4-flash': { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] },
+      'deepseek-v4-flash-vision-exp': { cacheHit: [0.02, 0.04], input: [1, 2], output: [4, 8] },
+    },
+  },
 ]
+
+// Model aliases observed on host and wrapper routes, mapped to the official API
+// model name used by the price table above. The DSH opencode-go route reports
+// `deepseek-v4.1-flash` for the model the pricing page calls
+// `deepseek-flash`, and wrapper routes may keep flat Hugging-Face style names
+// (siliconflow). An alias never shadows an exact entry: ratesFor takes the
+// newest policy that names either form, so each route follows the same
+// timeline while historical names keep their historical rates.
+const MODEL_ALIASES = new Map([
+  ['deepseek-v4.1-flash', 'deepseek-flash'],
+  ['deepseek-v4.1-flash-expires-on-0910', 'deepseek-flash'],
+  ['deepseek-ai/DeepSeek-V4-Flash', 'deepseek-flash'],
+  ['deepseek-ai/DeepSeek-V4-Pro', 'deepseek-v4-pro'],
+])
 
 let activePricePolicies = PRICE_POLICIES
 let pricingSync = {
@@ -238,15 +266,30 @@ function numericCells(row, count) {
  * documentation. A failed parse is deliberately treated as review-required;
  * the wallet never silently bills from a partially understood page.
  */
+/**
+ * Read one model-name cell. The live page appends footnote markers
+ * (`deepseek-flash<sup>(1)</sup>`) and renamed the Flash model on 2026-09-10;
+ * the canonical lowercase name is what the policy table and MODEL_ALIASES use.
+ */
+function officialPricingModelName(cell) {
+  const match = String(cell).match(/^(deepseek-[a-z0-9.-]+)(?:\s*\(\d+\))?$/)
+  return match === null ? null : match[1]
+}
+
 export function parseOfficialPricingHtml(html) {
   if (typeof html !== 'string' || html.length < 500) throw new Error('official pricing page is empty')
   const rows = [...html.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) =>
     [...match[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => decodeHtmlText(cell[1])),
   ).filter((row) => row.length > 0)
-  const header = rows.find((row) => row.some((cell) => cell === 'deepseek-v4-flash'))
-  const models = header ? header.filter((cell) => /^deepseek-v4-[a-z0-9-]+$/i.test(cell)) : []
-  const requiredModels = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp']
-  if (models.length < requiredModels.length || requiredModels.some((model) => !models.includes(model))) {
+  const header = rows.find((row) => row.some((cell) => cell === '模型'))
+    ?? rows.find((row) => row.some((cell) => officialPricingModelName(cell) !== null))
+  const models = header ? header.map(officialPricingModelName).filter((name) => name !== null) : []
+  // 2026-09-10 renamed the Flash column to `deepseek-flash` and dropped the
+  // separate vision column; accept either Flash name so both table revisions
+  // parse, but never proceed without a Flash column and the Pro column.
+  const flashNames = ['deepseek-flash', 'deepseek-v4-flash']
+  const requiredModels = ['deepseek-v4-pro']
+  if (!flashNames.some((model) => models.includes(model)) || requiredModels.some((model) => !models.includes(model))) {
     throw new Error('official pricing model table changed')
   }
 
@@ -272,9 +315,8 @@ export function parseOfficialPricingHtml(html) {
     }
   }
   const modelsWithRates = {}
-  for (const model of requiredModels) {
-    const index = models.indexOf(model)
-    modelsWithRates[model] = {
+  for (let index = 0; index < models.length; index += 1) {
+    modelsWithRates[models[index]] = {
       cacheHit: [cacheHit.offPeak[index], cacheHit.peak[index]],
       input: [input.offPeak[index], input.peak[index]],
       output: [output.offPeak[index], output.peak[index]],
@@ -470,14 +512,24 @@ export function healthSnapshot() {
 }
 
 export function ratesFor(model, atMs) {
+  const alias = MODEL_ALIASES.get(model)
+  const names = alias === undefined ? [model] : [model, alias]
   let entry
+  let resolved
   for (const policy of activePricePolicies) {
-    // Own-property check: a model named `__proto__`/`toString` would otherwise
-    // resolve to an Object.prototype member and produce NaN costs.
-    if (atMs >= policy.since && Object.hasOwn(policy.models, model)) entry = policy
+    if (atMs < policy.since) continue
+    for (const name of names) {
+      // Own-property check: a model named `__proto__`/`toString` would otherwise
+      // resolve to an Object.prototype member and produce NaN costs.
+      if (!Object.hasOwn(policy.models, name)) continue
+      if (entry === undefined || policy.since >= entry.since) {
+        entry = policy
+        resolved = name
+      }
+    }
   }
   if (entry === undefined) return null
-  const rates = entry.models[model]
+  const rates = entry.models[resolved]
   if (entry.peakOffPeak === true) {
     const peak = isBeijingPeak(atMs) ? 1 : 0
     return { cacheHit: rates.cacheHit[peak], input: rates.input[peak], output: rates.output[peak] }
